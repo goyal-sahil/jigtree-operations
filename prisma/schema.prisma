@@ -1,0 +1,54 @@
+// Prisma schema for BU Support Ticket Analyser
+// DB: Supabase PostgreSQL
+// Run `npm run db:generate` after changes to regenerate the Prisma client.
+// Run `npm run db:push` to push schema to the database (dev).
+// Run `npm run db:migrate` to apply migrations (production).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Transaction-mode pooler (port 6543) — required for Vercel serverless
+  url       = env("DATABASE_URL")
+  // Direct connection (port 5432) — used by Prisma for migrations only
+  directUrl = env("DIRECT_URL")
+}
+
+model UserSettings {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Matches auth.users(id) in Supabase — set and filtered by the app, enforced by RLS
+  userId            String   @unique @db.Uuid
+  kayakoUrl         String?
+  kayakoEmail       String?
+  /// AES-256-GCM encrypted: base64(iv[12] + authTag[16] + ciphertext)
+  kayakoPasswordEnc String?
+  /// AES-256-GCM encrypted: base64(iv[12] + authTag[16] + ciphertext)
+  anthropicKeyEnc   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  analyses TicketAnalysis[]
+
+  @@map("user_settings")
+}
+
+model TicketAnalysis {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @db.Uuid
+  ticketId     Int
+  kayakoUrl    String
+  /// JSON object: { executive_summary, one_line, case_summary, customer_sentiment, what_needed, next_steps }
+  sections     Json
+  /// JSON object: { "YYYY-MM-DD": "one sentence summary", ... }
+  daySummaries Json?
+  modelUsed    String?
+  postCount    Int?
+  createdAt    DateTime @default(now())
+
+  settings UserSettings @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@unique([userId, ticketId, kayakoUrl])
+  @@map("ticket_analyses")
+}
