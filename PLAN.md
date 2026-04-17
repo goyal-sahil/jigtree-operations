@@ -1,12 +1,22 @@
-# BU Support Ticket Analyser — Vercel/Supabase Migration Plan
+# JigTree Operations Hub — Vercel/Supabase App Plan
 
-## Status: Running — Core features confirmed working end-to-end
+## Status: Running — Phases 1–10 complete. Phase 11–12 (Hub + BU/PS Tickets) in spec.
 
-All phases 1–9 are complete. The app compiles with zero TypeScript errors and `npm run dev` starts cleanly.
-**Blocked on**: Supabase project credentials, Google OAuth client ID/secret, and `.env.local`.
+Core Ticket Analyser confirmed working end-to-end.  
+App is live at **https://jigtree-operations.vercel.app** (GitHub: `goyal-sahil/jigtree-operations`).  
+Phases 11–12 spec is at `docs/bu-ps-tickets-spec.md`.
 
 The Streamlit tool at `C:\Users\sahil\CoWork\Central Kayako Tickets\` is **not modified** by this project.
 This is a clean rewrite as a multi-user web application.
+
+---
+
+## Deployment
+
+| Environment | URL | Trigger |
+|---|---|---|
+| Production | https://jigtree-operations.vercel.app | `npx vercel --prod` |
+| GitHub | https://github.com/goyal-sahil/jigtree-operations | `git push origin main` |
 
 ### What diverged from the original plan
 - **Prisma added**: the plan used raw Supabase client for DB — Prisma ORM was chosen instead for type-safe queries and schema management
@@ -1192,16 +1202,58 @@ Cache key: `(user_id, ticket_id, kayako_url)`. Cache is NOT auto-invalidated whe
 - [x] Phase 7 — Anthropic Analysis + Caching (`lib/anthropic/client.ts`, `app/api/analysis/route.ts`)
 - [x] Phase 8 — Add Note API Route (`app/api/note/route.ts`)
 - [x] Phase 9 — UI Components + Dashboard (NavBar, TicketCard, ConversationThread, AIAnalysis, Timeline, AddNoteForm, SettingsForm, TicketAnalyser, all pages)
-- [ ] Phase 10 — Polish + Deploy
+- [x] Phase 10 — Polish + Deploy
   - [x] NavBar with email, settings link, sign out
+  - [x] Deploy to Vercel (https://jigtree-operations.vercel.app)
+  - [x] GitHub repo: goyal-sahil/jigtree-operations
   - [ ] Mobile responsive (sm: Tailwind prefixes on grids)
-  - [ ] Deploy to Vercel
 - [x] Supabase: create project (JigTree Operations, ap-northeast-1)
 - [x] Google Cloud: create OAuth client (JigTree Operations (Vercel)), add redirect URIs
 - [x] Fill in `.env.local` and `.env` with all credentials
 - [x] Run `npm run db:push` — tables created in Supabase
 - [ ] Run RLS policies in Supabase SQL editor — still pending
-- [ ] Vercel: set env vars, connect GitHub repo, deploy
+- [x] Vercel: env vars set, GitHub connected, deployed
+
+---
+
+### Phase 11 — JigTree Operations Hub + Layout Restructure
+
+**Spec:** `docs/bu-ps-tickets-spec.md` §2–3
+
+- [ ] Add `Sidebar.tsx` — collapsible left nav (icon + label, active route highlight, user footer)
+- [ ] Update `app/(dashboard)/layout.tsx` — sidebar + main content grid, retire NavBar
+- [ ] Move Ticket Analyser to `app/(dashboard)/analyser/page.tsx`
+- [ ] Add `HubPage.tsx` — tile grid component
+- [ ] Update `app/(dashboard)/page.tsx` — render Hub (first-login redirect to /settings preserved)
+
+---
+
+### Phase 12 — BU/PS Tickets
+
+**Spec:** `docs/bu-ps-tickets-spec.md` §4–13
+**Kayako view:** https://central-supportdesk.kayako.com/agent/conversations/view/64
+
+#### 12.1 Database
+- [ ] Add `BuPsTicket`, `BuPsTicketPost`, `BuPsTicketCustomField` models to `prisma/schema.prisma`
+- [ ] Run `npm run db:push`
+- [ ] Run RLS SQL in Supabase (see spec §9)
+
+#### 12.2 Types & Client
+- [ ] Extend `types/kayako.ts` — add `KayakoOrganization`, `BuPsTicketRow`; add `organization` to `KayakoCase`
+- [ ] Add `getViewCases(viewId)` to `KayakoClient` — paginated view fetch with endpoint fallback
+
+#### 12.3 API Routes
+- [ ] `app/api/bu-tickets/route.ts` — GET tickets from DB
+- [ ] `app/api/bu-tickets/sync/route.ts` — POST sync from Kayako (batched, upserts all 3 tables)
+
+#### 12.4 UI
+- [ ] `components/BUTicketsTable.tsx` — sortable/filterable table, Sync button, last-synced indicator
+- [ ] `app/(dashboard)/bu-tickets/page.tsx` — server component shell + client table
+
+#### 12.5 Deploy & Test
+- [ ] Push to GitHub → auto-deploy
+- [ ] Test sync endpoint — confirm Kayako view API endpoint (`/api/v1/cases/views/64`)
+- [ ] Verify field mapping: Esc, Team, BU, GHI, JIRA, Hold Reason
 
 ### Runtime bugs fixed post-build
 - **Kayako 401 on case fetch**: Authorization header was not included in post-auth requests. Fixed by storing `authHeader` as instance property and including it in `headers()` on all calls.

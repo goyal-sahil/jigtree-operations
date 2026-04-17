@@ -9,13 +9,19 @@
 
 ## What This Is
 
-A multi-user Next.js web app that mirrors the Streamlit tool at `C:\Users\sahil\CoWork\Central Kayako Tickets\` — load Kayako tickets, read conversation threads, run AI analysis, view timeline, post internal notes. Deployed to Vercel. The Streamlit tool is kept as-is and is a separate codebase.
+A multi-user Next.js web app — the **JigTree Operations Hub**. Features:
+- **Ticket Analyser** — load any Kayako ticket, AI analysis, timeline, post notes
+- **BU/PS Tickets** — table view of Kayako view #64, cached in DB (Phase 12, in spec)
+
+Live at **https://jigtree-operations.vercel.app** | GitHub: `goyal-sahil/jigtree-operations`
+
+The Streamlit tool at `C:\Users\sahil\CoWork\Central Kayako Tickets\` is kept as-is and is a separate codebase.
 
 ---
 
 ## Status
 
-**Running. Ticket fetch and AI analysis both confirmed working end-to-end.**
+**Running and deployed. Ticket Analyser fully working. Phase 11–12 (Hub + BU/PS Tickets) specced in `docs/bu-ps-tickets-spec.md`, ready to build.**
 
 ---
 
