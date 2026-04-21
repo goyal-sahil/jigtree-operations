@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { prisma } from '@/lib/prisma'
-import TicketAnalyser from '@/components/TicketAnalyser'
+import HubPage from '@/components/HubPage'
 
 export default async function DashboardPage() {
   const supabase = createClient()
@@ -16,5 +16,7 @@ export default async function DashboardPage() {
   // First login — no credentials saved yet
   if (!settings?.kayakoUrl) redirect('/settings')
 
-  return <TicketAnalyser />
+  const userName = user.email?.split('@')[0] ?? ''
+
+  return <HubPage userName={userName} />
 }

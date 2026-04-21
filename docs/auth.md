@@ -67,4 +67,6 @@ The app does **not** create triggers or functions in Supabase — `UserSettings`
 
 ## Sign Out
 
-The `NavBar` component has a "Sign out" button that calls `supabase.auth.signOut()` from the browser client, then redirects to `/login`. Sign-out clears the session cookie client-side.
+The `Sidebar` component has a "Sign out" button in its user footer that calls `supabase.auth.signOut()` from the browser client, then redirects to `/login`. Sign-out clears the session cookie client-side.
+
+(`NavBar.tsx` still exists in `components/` but is retired — user info and sign-out moved to the Sidebar in Phase 11.)

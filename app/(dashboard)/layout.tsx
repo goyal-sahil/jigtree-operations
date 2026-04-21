@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import NavBar from '@/components/NavBar'
+import Sidebar from '@/components/Sidebar'
+import { TimezoneProvider } from '@/components/TimezoneProvider'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = createClient()
@@ -8,10 +9,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (!user) redirect('/login')
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <NavBar userEmail={user.email ?? ''} />
-      <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
-        {children}
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar userEmail={user.email ?? ''} />
+      <main className="flex-1 overflow-y-auto bg-slate-50">
+        <TimezoneProvider>
+          {children}
+        </TimezoneProvider>
       </main>
     </div>
   )

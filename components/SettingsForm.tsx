@@ -3,25 +3,50 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
+const TIMEZONES: { value: string; label: string }[] = [
+  { value: 'UTC',                  label: 'UTC (Coordinated Universal Time)' },
+  { value: 'America/New_York',     label: 'New York (UTC-5/-4)' },
+  { value: 'America/Chicago',      label: 'Chicago (UTC-6/-5)' },
+  { value: 'America/Denver',       label: 'Denver (UTC-7/-6)' },
+  { value: 'America/Los_Angeles',  label: 'Los Angeles (UTC-8/-7)' },
+  { value: 'America/Sao_Paulo',    label: 'São Paulo (UTC-3)' },
+  { value: 'Europe/London',        label: 'London (UTC+0/+1)' },
+  { value: 'Europe/Paris',         label: 'Paris / Amsterdam (UTC+1/+2)' },
+  { value: 'Europe/Helsinki',      label: 'Helsinki / Tallinn (UTC+2/+3)' },
+  { value: 'Europe/Moscow',        label: 'Moscow (UTC+3)' },
+  { value: 'Asia/Dubai',           label: 'Dubai (UTC+4)' },
+  { value: 'Asia/Kolkata',         label: 'India (UTC+5:30)' },
+  { value: 'Asia/Dhaka',           label: 'Dhaka (UTC+6)' },
+  { value: 'Asia/Bangkok',         label: 'Bangkok / Jakarta (UTC+7)' },
+  { value: 'Asia/Singapore',       label: 'Singapore / Kuala Lumpur (UTC+8)' },
+  { value: 'Asia/Shanghai',        label: 'China (UTC+8)' },
+  { value: 'Asia/Tokyo',           label: 'Tokyo (UTC+9)' },
+  { value: 'Australia/Sydney',     label: 'Sydney (UTC+10/+11)' },
+  { value: 'Pacific/Auckland',     label: 'Auckland (UTC+12/+13)' },
+]
+
 interface SettingsFormProps {
   initialKayakoUrl:   string
   initialKayakoEmail: string
+  initialTimezone:    string
   isFirstLogin:       boolean
 }
 
 export default function SettingsForm({
   initialKayakoUrl,
   initialKayakoEmail,
+  initialTimezone,
   isFirstLogin,
 }: SettingsFormProps) {
   const router = useRouter()
-  const [kayakoUrl,     setKayakoUrl]     = useState(initialKayakoUrl)
-  const [kayakoEmail,   setKayakoEmail]   = useState(initialKayakoEmail)
-  const [kayakoPass,    setKayakoPass]    = useState('')
-  const [anthropicKey,  setAnthropicKey]  = useState('')
-  const [loading,       setLoading]       = useState(false)
-  const [error,         setError]         = useState('')
-  const [saved,         setSaved]         = useState(false)
+  const [kayakoUrl,    setKayakoUrl]    = useState(initialKayakoUrl)
+  const [kayakoEmail,  setKayakoEmail]  = useState(initialKayakoEmail)
+  const [kayakoPass,   setKayakoPass]   = useState('')
+  const [anthropicKey, setAnthropicKey] = useState('')
+  const [timezone,     setTimezone]     = useState(initialTimezone || 'UTC')
+  const [loading,      setLoading]      = useState(false)
+  const [error,        setError]        = useState('')
+  const [saved,        setSaved]        = useState(false)
 
   async function save() {
     setLoading(true)
@@ -36,6 +61,7 @@ export default function SettingsForm({
         kayako_email:    kayakoEmail.trim(),
         kayako_password: kayakoPass,
         anthropic_key:   anthropicKey,
+        timezone,
       }),
     })
 
@@ -86,9 +112,7 @@ export default function SettingsForm({
         </div>
 
         <div>
-          <label className="block text-sm font-semibold text-slate-700 mb-1">
-            Kayako API Password
-          </label>
+          <label className="block text-sm font-semibold text-slate-700 mb-1">Kayako API Password</label>
           <input
             type="password"
             value={kayakoPass}
@@ -100,9 +124,7 @@ export default function SettingsForm({
         </div>
 
         <div>
-          <label className="block text-sm font-semibold text-slate-700 mb-1">
-            Anthropic API Key
-          </label>
+          <label className="block text-sm font-semibold text-slate-700 mb-1">Anthropic API Key</label>
           <input
             type="password"
             value={anthropicKey}
@@ -110,6 +132,20 @@ export default function SettingsForm({
             placeholder={initialKayakoEmail ? '(leave blank to keep existing)' : 'sk-ant-…'}
             className="w-full border border-slate-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+        </div>
+
+        <div>
+          <label className="block text-sm font-semibold text-slate-700 mb-1">Timezone</label>
+          <select
+            value={timezone}
+            onChange={e => setTimezone(e.target.value)}
+            className="w-full border border-slate-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+          >
+            {TIMEZONES.map(tz => (
+              <option key={tz.value} value={tz.value}>{tz.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-slate-400 mt-1">Used to display all dates and timestamps across the app.</p>
         </div>
 
         {error && <p className="text-red-600 text-sm">❌ {error}</p>}

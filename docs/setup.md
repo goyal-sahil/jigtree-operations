@@ -41,6 +41,10 @@ ENCRYPTION_SECRET=<your-64-char-hex-string>
 
 # For local dev
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Comma-separated email addresses with admin access (delete controls in BU/PS table)
+ADMIN_EMAILS=sahil.goyal@aurea.com
+NEXT_PUBLIC_ADMIN_EMAILS=sahil.goyal@aurea.com
 ```
 
 Both `DATABASE_URL` and `DIRECT_URL` come from Supabase dashboard → Project Settings → Database → Connection string. Switch the mode selector between "Transaction" (port 6543) and "Session/Direct" (port 5432).
@@ -55,7 +59,7 @@ Once `DIRECT_URL` is set:
 npm run db:push
 ```
 
-This creates the `user_settings` and `ticket_analyses` tables in Supabase. You only need to do this once (or after schema changes).
+This creates all four tables (`user_settings`, `tickets`, `ticket_posts`, `ticket_analyses`) in Supabase. You only need to do this once (or after schema changes). After running `db:push`, also run `npm run db:generate` to regenerate the Prisma client — or stop the dev server first on Windows (DLL locked).
 
 To view and edit data visually:
 ```bash
@@ -84,9 +88,40 @@ CREATE POLICY "Users manage own analyses"
   ON ticket_analyses FOR ALL
   USING (auth.uid() = "userId"::uuid)
   WITH CHECK (auth.uid() = "userId"::uuid);
+
+-- tickets (shared cache — scoped to the user's kayakoUrl via user_settings join)
+-- Note: the application enforces kayakoUrl scoping at the query level.
+-- A simple SELECT policy is sufficient for defence-in-depth:
+ALTER TABLE tickets ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Authenticated users can read tickets"
+  ON tickets FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- ticket_posts (cascade-deleted with tickets; same policy)
+ALTER TABLE ticket_posts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Authenticated users can read ticket posts"
+  ON ticket_posts FOR SELECT
+  USING (auth.role() = 'authenticated');
+
+-- analysis_runs (append-only log — scoped to userId)
+ALTER TABLE analysis_runs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users manage own analysis runs"
+  ON analysis_runs FOR ALL
+  USING (auth.uid() = "userId"::uuid)
+  WITH CHECK (auth.uid() = "userId"::uuid);
+
+-- model_pricing (shared read-only pricing table — no user-specific data)
+ALTER TABLE model_pricing ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Authenticated users can read pricing"
+  ON model_pricing FOR SELECT
+  USING (auth.role() = 'authenticated');
 ```
 
-Note: The application also enforces `userId = auth.user.id` in every API route, so RLS is a defence-in-depth layer.
+Note: The application enforces `userId = auth.user.id` and `kayakoUrl` scoping in every API route, so RLS is a defence-in-depth layer. Prisma connects as the database owner and bypasses RLS — these policies protect against direct DB access only.
 
 ---
 
@@ -173,3 +208,9 @@ And add `https://your-app.vercel.app/auth/callback` to the Google OAuth allowed 
 
 **Posts timeout or partial results**
 - The Kayako posts endpoint has a 15-second timeout per page. For very large tickets the banner "Posts fetch stopped after N posts" will appear — this is expected behaviour inherited from the Streamlit tool.
+
+**`prisma.ticket is not a function` or `ticket` undefined at runtime**
+- The Prisma client is stale — the schema was changed but `prisma generate` was not re-run. Stop the dev server, run `npm run db:generate`, and restart.
+
+**Sync endpoint returns: `Database client is out of date`**
+- Same as above — run `npm run db:generate`.

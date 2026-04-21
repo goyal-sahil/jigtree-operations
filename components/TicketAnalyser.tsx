@@ -1,12 +1,13 @@
 'use client'
 
-import { useState } from 'react'
-import type { TicketData, AnalysisResult } from '@/types/kayako'
+import { useState, useEffect } from 'react'
+import type { TicketResponse, AnalysisResult } from '@/types/kayako'
 import TicketCard from './TicketCard'
 import ConversationThread from './ConversationThread'
 import AIAnalysis from './AIAnalysis'
 import Timeline from './Timeline'
 import AddNoteForm from './AddNoteForm'
+import CredentialsBanner from './CredentialsBanner'
 
 type Tab = 'ai' | 'timeline' | 'note'
 
@@ -14,30 +15,46 @@ export default function TicketAnalyser() {
   const [input,      setInput]      = useState('')
   const [fetching,   setFetching]   = useState(false)
   const [fetchError, setFetchError] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
 
-  const [ticketData, setTicketData] = useState<TicketData | null>(null)
+  const [ticketData, setTicketData] = useState<TicketResponse | null>(null)
   const [analysis,   setAnalysis]   = useState<AnalysisResult | null>(null)
   const [aiLoading,  setAiLoading]  = useState(false)
   const [aiError,    setAiError]    = useState('')
 
-  const [activeTab, setActiveTab] = useState<Tab>('ai')
+  const [activeTab,        setActiveTab]        = useState<Tab>('ai')
+  const [missingKayako,    setMissingKayako]    = useState(false)
+  const [missingAnthropic, setMissingAnthropic] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/credentials')
+      .then(r => r.json() as Promise<{ hasKayako: boolean; hasAnthropic: boolean }>)
+      .then(d => { setMissingKayako(!d.hasKayako); setMissingAnthropic(!d.hasAnthropic) })
+      .catch(() => null)
+  }, [])
 
   // ── Fetch ticket ────────────────────────────────────────────────────────────
-  async function fetchTicket() {
+  async function doFetch(forceRefresh = false) {
     if (!input.trim()) return
-    setFetching(true)
     setFetchError('')
-    setTicketData(null)
-    setAnalysis(null)
-    setAiError('')
+
+    if (forceRefresh) {
+      setRefreshing(true)
+    } else {
+      setFetching(true)
+      setTicketData(null)
+      setAnalysis(null)
+      setAiError('')
+    }
 
     const resp = await fetch('/api/ticket', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ ticketInput: input.trim() }),
+      body:    JSON.stringify({ ticketInput: input.trim(), forceRefresh }),
     })
 
     setFetching(false)
+    setRefreshing(false)
 
     if (!resp.ok) {
       const data = await resp.json()
@@ -45,8 +62,9 @@ export default function TicketAnalyser() {
       return
     }
 
-    const data = await resp.json()
+    const data = await resp.json() as TicketResponse
     setTicketData(data)
+    if (forceRefresh) setAnalysis(null)
   }
 
   // ── Run AI analysis ─────────────────────────────────────────────────────────
@@ -59,9 +77,8 @@ export default function TicketAnalyser() {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        caseId:       ticketData.caseId,
-        caseData:     ticketData.caseData,
-        posts:        ticketData.posts,
+        caseId:    ticketData.ticket.kayakoTicketId,
+        kayakoUrl: ticketData.ticket.kayakoUrl,
         forceRefresh,
       }),
     })
@@ -77,22 +94,28 @@ export default function TicketAnalyser() {
     setAnalysis(await resp.json())
   }
 
-  // ── Handle Enter key ────────────────────────────────────────────────────────
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') fetchTicket()
+    if (e.key === 'Enter') void doFetch(false)
+    if (e.key === 'Escape') {
+      setInput('')
+      setTicketData(null)
+      setAnalysis(null)
+      setFetchError('')
+      setAiError('')
+    }
   }
 
-  // ── After note posted — reload ticket to get fresh post list ───────────────
   async function onNotePosted() {
-    if (!input.trim()) return
-    setAnalysis(null) // invalidate cached analysis
-    await fetchTicket()
+    setAnalysis(null)
+    await doFetch(true)
   }
 
-  const requesterId = ticketData?.caseData?.requester?.id ?? null
+  const requesterKayakoId = ticketData?.ticket.requesterKayakoId ?? null
 
   return (
     <div>
+      <CredentialsBanner missingKayako={missingKayako} missingAnthropic={missingAnthropic} />
+
       {/* Search bar */}
       <div className="flex gap-3 mb-6">
         <input
@@ -104,7 +127,7 @@ export default function TicketAnalyser() {
           className="flex-1 border border-slate-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white shadow-sm"
         />
         <button
-          onClick={fetchTicket}
+          onClick={() => void doFetch(false)}
           disabled={fetching || !input.trim()}
           className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold px-6 py-3 rounded-xl transition shadow-sm"
         >
@@ -124,24 +147,23 @@ export default function TicketAnalyser() {
         </div>
       )}
 
-{ticketData && (
+      {ticketData && (
         <>
-          {/* Ticket card */}
           <TicketCard
-            caseData={ticketData.caseData}
-            caseId={ticketData.caseId}
+            ticket={ticketData.ticket}
             postCount={ticketData.posts.length}
+            lastSyncedAt={ticketData.lastSyncedAt}
+            onRefresh={() => void doFetch(true)}
+            refreshing={refreshing}
           />
 
-          {/* Posts warning */}
           {ticketData.warning && (
             <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-xl px-5 py-3 mb-4 text-sm">
               ⚠️ {ticketData.warning}
             </div>
           )}
 
-          {/* Conversation thread */}
-          <ConversationThread posts={ticketData.posts} requesterId={requesterId} />
+          <ConversationThread posts={ticketData.posts} requesterKayakoId={requesterKayakoId} />
 
           <div className="border-t border-slate-200 my-4" />
 
@@ -209,14 +231,17 @@ export default function TicketAnalyser() {
           {activeTab === 'timeline' && (
             <Timeline
               posts={ticketData.posts}
-              requesterId={requesterId}
+              requesterKayakoId={requesterKayakoId}
               daySummaries={analysis?.day_summaries ?? {}}
             />
           )}
 
           {/* Tab: Add Note */}
           {activeTab === 'note' && (
-            <AddNoteForm caseId={ticketData.caseId} onSuccess={onNotePosted} />
+            <AddNoteForm
+              caseId={ticketData.ticket.kayakoTicketId}
+              onSuccess={onNotePosted}
+            />
           )}
         </>
       )}

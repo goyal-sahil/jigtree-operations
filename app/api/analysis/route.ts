@@ -1,24 +1,23 @@
 import { NextResponse, type NextRequest } from 'next/server'
+
+export const maxDuration = 120
 import { createClient } from '@/lib/supabase/server'
 import { decrypt } from '@/lib/encryption'
 import { prisma } from '@/lib/prisma'
 import { analyseTicket } from '@/lib/anthropic/client'
-import type { KayakoCase, KayakoPost, AnalysisSections } from '@/types/kayako'
+import { ticketRowToKayakoCase, dbPostsToKayakoPosts } from '@/lib/kayako/ticketService'
 
 export async function POST(request: NextRequest) {
-  // ── Auth ──────────────────────────────────────────────────────────────────
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { caseId, caseData, posts, forceRefresh = false } = await request.json() as {
-    caseId:       number
-    caseData:     KayakoCase
-    posts:        KayakoPost[]
+  const { caseId, kayakoUrl, forceRefresh = false } = await request.json() as {
+    caseId:        number
+    kayakoUrl?:    string
     forceRefresh?: boolean
   }
 
-  // ── Load settings ─────────────────────────────────────────────────────────
   const settings = await prisma.userSettings.findUnique({
     where:  { userId: user.id },
     select: { kayakoUrl: true, anthropicKeyEnc: true },
@@ -31,31 +30,39 @@ export async function POST(request: NextRequest) {
     )
   }
 
+  const effectiveKayakoUrl = kayakoUrl ?? settings.kayakoUrl ?? ''
+
+  // Look up ticket + posts from DB
+  const ticketRecord = await prisma.ticket.findFirst({
+    where:   { kayakoTicketId: caseId, kayakoUrl: effectiveKayakoUrl },
+    include: { posts: { orderBy: { postedAt: 'asc' } } },
+  })
+
+  if (!ticketRecord) {
+    return NextResponse.json(
+      { error: 'Ticket not found in database. Please fetch the ticket first.' },
+      { status: 404 }
+    )
+  }
+
   // ── Cache check ───────────────────────────────────────────────────────────
   if (!forceRefresh) {
     const cached = await prisma.ticketAnalysis.findUnique({
-      where: {
-        userId_ticketId_kayakoUrl: {
-          userId:    user.id,
-          ticketId:  caseId,
-          kayakoUrl: settings.kayakoUrl ?? '',
-        },
-      },
+      where: { ticketId_userId: { ticketId: ticketRecord.id, userId: user.id } },
     })
-
-    if (cached) {
+    if (cached?.status === 'done' && cached.sections) {
       return NextResponse.json({
-        sections:     cached.sections     as unknown as AnalysisSections,
-        day_summaries: cached.daySummaries as unknown as Record<string, string>,
-        model_used:   cached.modelUsed,
-        post_count:   cached.postCount,
-        created_at:   cached.createdAt.toISOString(),
-        fromCache:    true,
+        sections:      cached.sections,
+        day_summaries: cached.daySummaries,
+        model_used:    cached.modelUsed,
+        post_count:    cached.postCount,
+        status:        'done',
+        created_at:    cached.updatedAt.toISOString(),
+        fromCache:     true,
       })
     }
   }
 
-  // ── Decrypt API key ───────────────────────────────────────────────────────
   let apiKey: string
   try {
     apiKey = decrypt(settings.anthropicKeyEnc)
@@ -63,40 +70,81 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to decrypt Anthropic API key.' }, { status: 500 })
   }
 
-  // ── Run analysis ──────────────────────────────────────────────────────────
+  // Convert DB records to Kayako types for analysis
+  const caseData = ticketRowToKayakoCase(ticketRecord)
+  const posts    = dbPostsToKayakoPosts(ticketRecord.posts)
+
+  const trigger = forceRefresh ? 'forced' : 'manual'
+  const startMs = Date.now()
+
   let result
   try {
     result = await analyseTicket(caseData, posts, apiKey)
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'AI analysis failed.'
+    await prisma.analysisRun.create({
+      data: {
+        ticketId:       ticketRecord.id,
+        userId:         user.id,
+        kayakoTicketId: ticketRecord.kayakoTicketId,
+        kayakoUrl:      ticketRecord.kayakoUrl,
+        trigger,
+        durationMs:     Date.now() - startMs,
+        status:         'error',
+        errorMsg:       msg,
+      },
+    }).catch(() => null)
     return NextResponse.json({ error: msg }, { status: 502 })
   }
 
-  // ── Save to cache ─────────────────────────────────────────────────────────
+  const durationMs = Date.now() - startMs
+
+  // ── Save to ticket_analyses ───────────────────────────────────────────────
   await prisma.ticketAnalysis.upsert({
-    where: {
-      userId_ticketId_kayakoUrl: {
-        userId:    user.id,
-        ticketId:  caseId,
-        kayakoUrl: settings.kayakoUrl ?? '',
-      },
+    where:  { ticketId_userId: { ticketId: ticketRecord.id, userId: user.id } },
+    create: {
+      ticketId:     ticketRecord.id,
+      userId:       user.id,
+      sections:     result.sections as object,
+      daySummaries: result.day_summaries as object,
+      modelUsed:    result.model_used,
+      postCount:    result.post_count,
+      oneLiner:     result.sections.one_liner || null,
+      blockerType:  result.sections.blocker_type || null,
+      inputTokens:  result.input_tokens,
+      outputTokens: result.output_tokens,
+      status:       'done',
     },
     update: {
-      sections:     result.sections     as object,
+      sections:     result.sections as object,
       daySummaries: result.day_summaries as object,
       modelUsed:    result.model_used,
       postCount:    result.post_count,
-    },
-    create: {
-      userId:       user.id,
-      ticketId:     caseId,
-      kayakoUrl:    settings.kayakoUrl ?? '',
-      sections:     result.sections     as object,
-      daySummaries: result.day_summaries as object,
-      modelUsed:    result.model_used,
-      postCount:    result.post_count,
+      oneLiner:     result.sections.one_liner || null,
+      blockerType:  result.sections.blocker_type || null,
+      inputTokens:  result.input_tokens,
+      outputTokens: result.output_tokens,
+      status:       'done',
+      errorMsg:     null,
     },
   })
 
-  return NextResponse.json({ ...result, fromCache: false })
+  // ── Append to analysis_runs log ───────────────────────────────────────────
+  await prisma.analysisRun.create({
+    data: {
+      ticketId:       ticketRecord.id,
+      userId:         user.id,
+      kayakoTicketId: ticketRecord.kayakoTicketId,
+      kayakoUrl:      ticketRecord.kayakoUrl,
+      trigger,
+      modelUsed:      result.model_used,
+      postCount:      result.post_count,
+      inputTokens:    result.input_tokens  ?? null,
+      outputTokens:   result.output_tokens ?? null,
+      durationMs,
+      status:         'done',
+    },
+  }).catch(() => null)
+
+  return NextResponse.json({ ...result, status: 'done', fromCache: false })
 }

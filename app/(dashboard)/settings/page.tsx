@@ -10,7 +10,7 @@ export default async function SettingsPage() {
 
   const settings = await prisma.userSettings.findUnique({
     where:  { userId: user.id },
-    select: { kayakoUrl: true, kayakoEmail: true },
+    select: { kayakoUrl: true, kayakoEmail: true, timezone: true },
   })
 
   const isFirstLogin = !settings?.kayakoUrl
@@ -26,6 +26,7 @@ export default async function SettingsPage() {
       <SettingsForm
         initialKayakoUrl={settings?.kayakoUrl ?? ''}
         initialKayakoEmail={settings?.kayakoEmail ?? ''}
+        initialTimezone={settings?.timezone ?? 'UTC'}
         isFirstLogin={isFirstLogin}
       />
     </div>

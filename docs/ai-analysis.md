@@ -2,9 +2,11 @@
 
 ## Overview
 
-AI analysis is powered by Anthropic Claude. When a user clicks "Run Analysis", the app sends the full ticket conversation to Claude and receives a structured analysis with seven sections. Results are cached in PostgreSQL so subsequent opens of the same ticket don't re-run Claude.
+AI analysis is powered by Anthropic Claude. When a user clicks "Run Analysis", the app reads the ticket and posts from the database, sends the full conversation to Claude, and receives a structured analysis. Results are cached in PostgreSQL so subsequent opens of the same ticket don't re-run Claude.
 
-The implementation is a direct TypeScript port of `analyse_ticket_with_ai()` in `kayako_tool.py`. The prompt, section headings, and model selection logic are identical.
+The implementation is a TypeScript port of `analyse_ticket_with_ai()` in `kayako_tool.py`, updated with a revised prompt format and token tracking.
+
+**Important**: `/api/analysis` reads ticket and post data directly from the `tickets` and `ticket_posts` tables. It does **not** accept `caseData` or `posts` in the request body — the ticket must have been fetched and persisted first via `/api/ticket` or `/api/bu-tickets/[id]/refresh`.
 
 ---
 
@@ -19,7 +21,7 @@ The implementation is a direct TypeScript port of `analyse_ticket_with_ai()` in 
 | Subject or any post contains a complexity keyword | +1 |
 | Ticket created > 7 days ago | +2 |
 
-**Score ≥ 3** → `claude-sonnet-4-6`  
+**Score ≥ 3** → `claude-sonnet-4-6`
 **Score < 3** → `claude-haiku-4-5-20251001`
 
 Complexity keywords: `urgent`, `escalat`, `legal`, `refund`, `cancel`, `chargeback`, `frustrated`, `angry`, `unacceptable`, `lawsuit`, `terrible`, `outage`, `critical`, `broken`, `down`, `lost data`
@@ -30,17 +32,25 @@ The model used is stored in `ticket_analyses.modelUsed` and displayed as a pill 
 
 ## Output Sections
 
-Claude returns exactly seven sections:
+Claude returns eight sections (seven analysis sections + one timeline):
 
-| Section | Description |
+| Section key | Description |
 |---|---|
-| **Executive Summary** | 3–4 sentence paragraph — the situation at a glance for a manager |
-| **One-Line Summary** | Single sentence, max 20 words |
-| **Case Summary** | 3–5 sentences: what was reported, what was tried, current state |
-| **Customer Sentiment** | One sentence on emotional state + 1–2 sentences on cause |
-| **What's Needed to Close** | Bullet list of specific conditions to resolve the ticket |
-| **Recommended Next Steps** | Numbered action plan, ordered by priority |
-| **Day-by-Day Summary** | One sentence per date: `YYYY-MM-DD: [summary]` |
+| **one_liner** | Single sentence summary of the ticket (shown in BU/PS table) |
+| **blocker_type** | Short blocker category label (e.g. "Bug", "Config", "Waiting for Customer") — shown in BU/PS table |
+| **blocker_detail** | One-line detail on what's blocking resolution |
+| **path_to_closure** | Concise bullet list of what needs to happen to close the ticket |
+| **case_summary** | Bullet points: issue, root cause, impact, current state |
+| **customer_sentiment** | One-line label + bullets on what's driving it |
+| **what_needed** | Bullet list of specific closure conditions |
+| **next_steps** | Numbered action list, ordered by priority with owner |
+| **day_summaries** | `{ "YYYY-MM-DD": "one sentence per active date" }` — separate field |
+
+`oneLiner` and `blockerType` are also stored as dedicated columns on `ticket_analyses` (extracted from sections) so they can be queried/sorted efficiently in the BU/PS table without parsing JSON.
+
+The `AnalysisSections` type: `{ one_liner, blocker_type, blocker_detail, path_to_closure, case_summary, customer_sentiment, what_needed, next_steps }`.
+
+`max_tokens` is set to `2500`.
 
 ---
 
@@ -63,13 +73,31 @@ Post text is truncated at 1500 characters per post to control token usage on lar
 
 ---
 
+## Token Tracking and Cost Calculation
+
+The Anthropic SDK returns token counts in `response.usage`. The analysis route stores these:
+
+- `inputTokens` — stored in `ticket_analyses.inputTokens` and `analysis_runs.inputTokens`
+- `outputTokens` — stored in `ticket_analyses.outputTokens` and `analysis_runs.outputTokens`
+
+These are also returned in the API response (`input_tokens`, `output_tokens`). They are overwritten in `ticket_analyses` on each re-run; the historical log in `analysis_runs` is never modified.
+
+**Cost calculation** (`lib/pricing.ts`):
+- `findPricing(modelId, runDate, pricingRows)` — finds the `ModelPricing` row whose `modelPattern` is a substring of the model ID and whose `effectiveFrom`/`effectiveTo` date range covers `runDate`
+- `computeCost(inputTokens, outputTokens, pricing)` — returns `{ inputCostUsd, outputCostUsd, totalCostUsd }`
+- `formatCostUsd(n)` — auto-scales display: `$0.0023`, `$0.12`, `$1.50`, etc.
+
+Costs are computed at query time (not stored) by the `GET /api/bu-tickets/[id]` route. The `AnalysisHistory` component sums them and shows a running total.
+
+---
+
 ## Caching
 
-Results are stored in `ticket_analyses` with a unique key of `(userId, ticketId, kayakoUrl)`.
+Results are stored in `ticket_analyses` with a unique key of `(ticketId, userId)` — one cached analysis per user per ticket (scoped to the user's Kayako instance via the ticket FK).
 
-- **Cache hit** (no `forceRefresh`): the stored JSON is returned immediately with `fromCache: true` and the original `createdAt` timestamp
+- **Cache hit** (no `forceRefresh`): the stored JSON is returned immediately with `fromCache: true` and the `updatedAt` timestamp shown as `created_at`
 - **Cache miss or `forceRefresh=true`**: Claude is called, result is written via `upsert`
-- **Invalidation**: the TicketAnalyser client sets `forceRefresh=true` when the user clicks "Re-run". Also invalidated (cleared from UI state, not DB) when a new note is posted and the ticket is reloaded
+- **Invalidation**: the TicketAnalyser client sets `forceRefresh=true` when the user clicks "Re-run". Also cleared from UI state (not DB) when a new note is posted and the ticket is reloaded.
 
 The cache is per-user, so one user's analysis never returns as another user's result.
 
@@ -80,46 +108,75 @@ The cache is per-user, so one user's analysis never returns as another user's re
 Request body:
 ```json
 {
-  "caseId": 12345,
-  "caseData": { ...KayakoCase },
-  "posts":    [ ...KayakoPost[] ],
+  "caseId":       12345,
+  "kayakoUrl":    "https://central-supportdesk.kayako.com",
   "forceRefresh": false
 }
 ```
+
+`kayakoUrl` is optional — falls back to the user's saved kayakoUrl setting.
 
 Response (success):
 ```json
 {
   "sections": {
-    "executive_summary": "...",
-    "one_line": "...",
-    "case_summary": "...",
+    "case_summary":       "...",
     "customer_sentiment": "...",
-    "what_needed": "...",
-    "next_steps": "..."
+    "what_needed":        "...",
+    "next_steps":         "..."
   },
   "day_summaries": { "2024-01-15": "Customer reported...", ... },
-  "model_used": "claude-haiku-4-5-20251001",
-  "post_count": 23,
-  "fromCache": false,
-  "created_at": "2024-01-16T10:30:00.000Z"  // only if fromCache: true
+  "model_used":    "claude-haiku-4-5-20251001",
+  "post_count":    23,
+  "input_tokens":  1843,
+  "output_tokens": 412,
+  "status":        "done",
+  "fromCache":     false,
+  "created_at":    "2024-01-16T10:30:00.000Z"
 }
 ```
 
-The `caseData` and `posts` are passed in the request body (already fetched by the ticket route) rather than re-fetching from Kayako, which saves an extra authentication round-trip.
+`created_at` is only meaningful when `fromCache: true` — it is the `updatedAt` of the cached row.
+
+---
+
+## Analysis Run Logging
+
+Every analysis attempt (manual, forced, or batch) appends a row to `analysis_runs` via `prisma.analysisRun.create(...)`. This happens for both success and error outcomes. The `AnalysisHistory` component on the BU/PS ticket detail page displays this history in a collapsible table with per-run costs.
+
+**`AnalysisRun` fields recorded per call:**
+- `trigger` — `"manual"` (first run), `"forced"` (re-run button), or `"batch"`
+- `modelUsed`, `postCount`, `inputTokens`, `outputTokens`
+- `durationMs` — wall time from before `analyseTicket()` call to after
+- `status` — `"done"` or `"error"` (with `errorMsg` if error)
+
+---
+
+## Background Batch Analysis
+
+`/api/bu-tickets/analyse-batch` runs AI analysis on up to 5 BU/PS tickets per call, processing tickets that have posts synced (`postsStatus='done'`) but no complete analysis with `oneLiner` populated for the current user. It uses the same `analyseTicket()` function and stores all fields including `oneLiner` and `blockerType`.
+
+Status flow: `pending` → `running` (upserted before Claude call) → `done` or `error`.
+
+---
+
+## Transient Error Retry
+
+`analyseTicket()` wraps `client.messages.create()` with a single retry after 2 s if the Anthropic API returns an HTTP 500 error. This handles transient server errors without user action.
 
 ---
 
 ## Anthropic SDK
 
-Uses `@anthropic-ai/sdk`. The API key is stored encrypted in `user_settings.anthropicKeyEnc` and decrypted per-request inside the route handler. It is never logged or returned to the browser.
+Uses `@anthropic-ai/sdk` v0.39+. The API key is stored encrypted in `user_settings.anthropicKeyEnc` and decrypted per-request inside the route handler. It is never logged or returned to the browser.
 
 ```typescript
 const client = new Anthropic({ apiKey })
 const response = await client.messages.create({
   model,
-  max_tokens: 2000,
+  max_tokens: 2500,
   system: systemPrompt,
   messages: [{ role: 'user', content: userPrompt }],
 })
+// response.usage.input_tokens / output_tokens are stored in DB
 ```

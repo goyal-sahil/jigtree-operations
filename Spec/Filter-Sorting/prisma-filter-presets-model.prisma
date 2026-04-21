@@ -1,0 +1,28 @@
+// Template Prisma model for per-user filter presets.
+// Adjust model/enum names to match your app conventions.
+
+enum FilterPresetVisibility {
+  PRIVATE
+  SHARED
+}
+
+model FilterPreset {
+  id                    String                 @id @default(uuid())
+  userId                String
+  module                String
+  name                  String
+  queryString           String                 @db.Text
+  isDefault             Boolean                @default(false)
+  includeViewInIdentity Boolean                @default(false)
+  visibility            FilterPresetVisibility @default(PRIVATE)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, module, name])
+  @@index([userId, module, isDefault])
+  @@index([userId, module, createdAt])
+}
+
+// Assumes `User` model exists.

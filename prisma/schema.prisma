@@ -1,4 +1,4 @@
-// Prisma schema for BU Support Ticket Analyser
+// Prisma schema for JigTree Operations Hub
 // DB: Supabase PostgreSQL
 // Run `npm run db:generate` after changes to regenerate the Prisma client.
 // Run `npm run db:push` to push schema to the database (dev).
@@ -22,6 +22,8 @@ model UserSettings {
   userId            String   @unique @db.Uuid
   kayakoUrl         String?
   kayakoEmail       String?
+  /// IANA timezone identifier, e.g. "Asia/Singapore". Defaults to UTC.
+  timezone          String   @default("UTC")
   /// AES-256-GCM encrypted: base64(iv[12] + authTag[16] + ciphertext)
   kayakoPasswordEnc String?
   /// AES-256-GCM encrypted: base64(iv[12] + authTag[16] + ciphertext)
@@ -34,21 +36,141 @@ model UserSettings {
   @@map("user_settings")
 }
 
+// ── Unified ticket cache (Analyser + BU/PS sync) ──────────────────────────
+
+model Ticket {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kayakoTicketId  Int
+  kayakoUrl       String
+  title           String
+  status          String?
+  priority        String?
+  product         String?
+  /// Brand name from Kayako (e.g. "Jigsaw", "Coppertree") — used as BU display
+  brand           String?
+  requesterName      String?
+  requesterEmail     String?
+  requesterKayakoId  Int?
+  organization       String?
+  /// "PS" or "BU" — derived from tags (bu_ps → PS, bu_other → BU)
+  team            String?
+  isEscalated     Boolean   @default(false)
+  ghiId           String?
+  ghiStatus       String?
+  /// JSON: { "PS Skyvera JIRA Key": "ZTOPS-527", ... }
+  jiraFields      Json?
+  holdReason      String?
+  tags            String[]
+  assignee        String?
+  /// Full resolved custom fields array: [{ id, label, value, type }]
+  customFields    Json?
+  /// true = part of BU/PS view 64 sync
+  isBuPs          Boolean   @default(false)
+  /// "none" | "fetching" | "done" | "error"
+  postsStatus     String    @default("none")
+  postsLastSyncedAt DateTime?
+  kayakoCreatedAt DateTime?
+  kayakoUpdatedAt DateTime?
+  lastSyncedAt    DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  posts        TicketPost[]
+  analyses     TicketAnalysis[]
+  analysisRuns AnalysisRun[]
+
+  @@unique([kayakoTicketId, kayakoUrl])
+  @@map("tickets")
+}
+
+model TicketPost {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kayakoPostId Int
+  ticketId     String    @db.Uuid
+  contents     String    @db.Text
+  contentType  String?
+  creatorId    Int?
+  creatorName  String?
+  creatorType  String?
+  channel      String?
+  isPrivate    Boolean   @default(false)
+  postedAt     DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, kayakoPostId])
+  @@map("ticket_posts")
+}
+
 model TicketAnalysis {
   id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId     String   @db.Uuid
   userId       String   @db.Uuid
-  ticketId     Int
-  kayakoUrl    String
-  /// JSON object: { executive_summary, one_line, case_summary, customer_sentiment, what_needed, next_steps }
-  sections     Json
-  /// JSON object: { "YYYY-MM-DD": "one sentence summary", ... }
+  sections     Json?
   daySummaries Json?
   modelUsed    String?
   postCount    Int?
+  /// "pending" | "running" | "done" | "error"
+  status       String   @default("pending")
+  errorMsg     String?
+  oneLiner     String?
+  blockerType  String?
+  inputTokens  Int?
+  outputTokens Int?
   createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
+  ticket   Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
   settings UserSettings @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
-  @@unique([userId, ticketId, kayakoUrl])
+  @@unique([ticketId, userId])
   @@map("ticket_analyses")
+}
+
+// Pricing table — one row per model per pricing period
+// Update effectiveTo on the old row and insert a new row when prices change.
+// modelPattern is a substring match against the full model ID (e.g. "claude-haiku-4-5").
+model ModelPricing {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  modelPattern     String
+  inputCostPer1M   Float
+  outputCostPer1M  Float
+  effectiveFrom    DateTime
+  /// null = currently active
+  effectiveTo      DateTime?
+  notes            String?
+  createdAt        DateTime  @default(now())
+
+  @@map("model_pricing")
+}
+
+// Append-only log of every AI analysis attempt (one row per run).
+// ticketId is nullable so rows survive ticket deletion (orphaned for cost history).
+// kayakoTicketId + kayakoUrl allow re-linking when the ticket is re-imported.
+model AnalysisRun {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Nullable — set to null when the parent ticket is deleted (SetNull)
+  ticketId       String?  @db.Uuid
+  userId         String   @db.Uuid
+  /// Kayako integer ticket ID — persisted for re-linking after ticket deletion
+  kayakoTicketId Int
+  /// Kayako base URL — needed alongside kayakoTicketId to uniquely identify a ticket
+  kayakoUrl      String
+  /// 'manual' | 'batch' | 'forced'
+  trigger        String
+  modelUsed      String?
+  postCount      Int?
+  inputTokens    Int?
+  outputTokens   Int?
+  durationMs     Int?
+  /// 'done' | 'error'
+  status         String
+  errorMsg       String?
+  createdAt      DateTime @default(now())
+
+  ticket Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  @@map("analysis_runs")
 }

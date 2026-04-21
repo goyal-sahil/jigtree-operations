@@ -21,7 +21,7 @@ Without this, case and post fetches return HTTP 401 even when `session_id` is co
 Kayako uses Basic HTTP auth to get a session:
 
 ```
-POST /api/v1/me
+GET /api/v1/me
 Authorization: Basic base64(email:api_password)
 ```
 
@@ -29,22 +29,31 @@ Response contains `session_id` (in JSON body, or in `Set-Cookie` header as fallb
 
 All subsequent requests use:
 ```
+Authorization: Basic base64(email:api_password)
 Cookie: session_id=<value>
 X-CSRF-Token: <value>
 ```
 
 **Important**: The password is the **Kayako API password**, not the web login password. Users set this in Kayako at: My Profile → Change Password → API Password.
 
+Node.js 18+ note: `getSetCookie()` returns an array of all `Set-Cookie` headers — used when the session ID comes via cookie rather than JSON body.
+
 ---
 
 ## KayakoClient (`lib/kayako/client.ts`)
+
+### Constructor
+
+```typescript
+new KayakoClient(baseUrl: string, clientSignal?: AbortSignal)
+```
+
+`clientSignal` is a caller-provided cancellation signal (e.g. `request.signal` from the route handler). The client combines it with its own per-request 15s timeout using `AbortSignal.any()` (Node 20+) or a manual combiner (Node 18 fallback).
 
 ### Methods
 
 #### `authenticate(email, password)`
 Calls `GET /api/v1/me` with Basic auth. Stores `sessionId`, `csrfToken`, and `authHeader` as instance properties. Throws `Error` on HTTP error or if no `session_id` is found.
-
-Session ID is extracted from the JSON body first, then falls back to scanning `Set-Cookie` headers. In Node.js 18+ the `getSetCookie()` method (returns array) is preferred over the single-value `get('set-cookie')`.
 
 #### `getCase(caseId)`
 
@@ -52,12 +61,12 @@ Runs **four requests in parallel** via `Promise.allSettled`, then resolves N mor
 
 ```
 [parallel]
-  GET /api/v1/cases/{caseId}?include=user,team   → case object + requester + team
-  GET /api/v1/cases/statuses                      → all status definitions (for label lookup)
-  GET /api/v1/cases/priorities                    → all priority definitions (for label lookup)
-  GET /api/v1/cases/fields                        → all custom field definitions
+  GET /api/v1/cases/{caseId}?include=user,team,organization,brand&fields=+tags
+  GET /api/v1/cases/statuses
+  GET /api/v1/cases/priorities
+  GET /api/v1/cases/fields
 
-[sequential, for each SELECT field with a numeric option ID value]
+[parallel, for each SELECT/RADIO/CASCADINGSELECT field with a numeric option ID value]
   GET /api/v1/cases/fields/{fieldId}?include=field_option,locale_field
     → expands options with translated label inline
 
@@ -66,43 +75,35 @@ Runs **four requests in parallel** via `Promise.allSettled`, then resolves N mor
     → resolves locale_field stub to plain translation string
 ```
 
-**Fields pulled from the case API response:**
-
-| Field | Source | Notes |
-|---|---|---|
-| `id` | Case object | Ticket ID |
-| `subject` | Case object | |
-| `status.id` | Case object | |
-| `status.label` | Statuses list | Matched by ID, label preferred over name |
-| `priority.id` | Case object | |
-| `priority.label` | Priorities list | Matched by ID |
-| `requester` | Case object (`include=user`) | Full `KayakoUser` with `full_name`, `identities` |
-| `assigned_agent` | Case object (`include=user`) | Full `KayakoUser` or `null` |
-| `assigned_team` | Case object (`include=team`) | `{ id, title }` or `null` |
-| `tags` | Case object | `string[]` |
-| `created_at` | Case object | ISO 8601 |
-| `updated_at` | Case object | ISO 8601 |
-| `custom_fields` | Case object (raw stubs) + fields API (definitions + option labels) | See below |
+Tags are returned as objects when using `fields=+tags` — normalised to plain strings in `getCase`.
 
 **Custom fields resolution:**
-
-The case response includes `custom_fields` as raw stubs: `{ field: { id }, value }`. Values are resolved against field definitions into `{ id, label, value, type }`:
-
 1. Non-system fields only (`is_system: false`)
 2. Empty values are skipped
 3. Text/date fields: `value` is used as-is
-4. SELECT/RADIO/CASCADINGSELECT fields: `value` is a numeric option ID — resolved to a human-readable label via `GET /api/v1/cases/fields/{fieldId}?include=field_option,locale_field`
-5. If the label cannot be resolved (option not found, locale stub without translation), the field is omitted from output entirely rather than showing a raw ID
+4. SELECT/RADIO/CASCADINGSELECT fields: `value` is a numeric option ID — resolved to human-readable label
+5. If label cannot be resolved (option not found, locale stub without translation), the field is omitted entirely rather than showing a raw ID
 
-**Known API quirk — `/api/v1/base/field/option/{id}` returns HTTP 400**: This endpoint is blocked for external API consumers. Use `GET /api/v1/cases/fields/{fieldId}?include=field_option,locale_field` instead — it expands all options with their locale translations in a single call.
+**Known API quirk — `/api/v1/base/field/option/{id}` returns HTTP 400**: This endpoint is blocked for external API consumers. Use `GET /api/v1/cases/fields/{fieldId}?include=field_option,locale_field` instead.
 
-**Product field (ID 16)**: The "Product" custom field is a SELECT field (e.g. `Discover XI`, `CS Escalation`, `Crossover Hiring`). Its option IDs (e.g. `7147`) are resolved to display names via the above mechanism.
+#### `getCaseRaw(caseId)`
+Fetches `GET /api/v1/cases/{caseId}?include=user,team,organization,brand` without running the status/priority/field-def parallel lookups. Used by the BU/PS sync where shared lookups are pre-fetched once for all tickets.
+
+#### `getCaseTags(caseId)`
+Fetches `GET /api/v1/cases/{caseId}/tags`. Returns `string[]`, empty on failure (fail-silent).
 
 #### `getAllPosts(caseId, pageSize=200, maxPosts=500)`
 Fetches all posts with pagination. See [Posts Pagination](#posts-pagination) below.
 
 #### `resolveUsers(posts, seedUsers)`
 Fills in `creator.full_name` for post stubs that only have `creator.id`. See [User Resolution](#user-resolution) below.
+
+#### `getViewCases(viewId)`
+Fetches all case stubs from a Kayako view via pagination:
+```
+GET /api/v1/views/{viewId}/cases?limit=200
+```
+Follows `next_url` until exhausted. Returns `KayakoCase[]`. Used by the BU/PS sync for view #64.
 
 #### `addNote(caseId, htmlContent)`
 ```
@@ -120,6 +121,51 @@ Converts plain text (from the Add Note textarea) to HTML paragraphs for the Kaya
 
 ---
 
+## `lib/kayako/ticketService.ts` — Shared Fetch Service
+
+This module is the single code path for fetching a full ticket (case + posts + user resolution) and persisting it to the DB. It is used by both the Ticket Analyser (`/api/ticket`) and the BU/PS refresh (`/api/bu-tickets/[id]/refresh`).
+
+### `fetchAndPersistTicket(caseId, client, kayakoUrl)`
+
+```typescript
+async function fetchAndPersistTicket(
+  caseId:    number,
+  client:    KayakoClient,
+  kayakoUrl: string,
+): Promise<{ ticket: TicketRow; posts: UnifiedPost[]; warning?: string }>
+```
+
+Steps:
+1. Run `client.getCase(caseId)` and `client.getAllPosts(caseId)` in parallel via `Promise.allSettled`
+2. Resolve creator names via `client.resolveUsers(rawPosts)`
+3. Extract metadata: `extractSpecialFields(customFields)` for product/GHI/holdReason/jiraFields, `extractTeam(tags)` for PS/BU, brand name from `caseData.brand`
+4. Upsert ticket to `tickets` table — `isBuPs` is only set to `true` in `create`; in `update` it is omitted so a BU/PS-synced ticket retains its `isBuPs=true` flag after an Analyser refresh
+5. Upsert each post to `ticket_posts` table
+6. Read back from DB and return `TicketRow` + `UnifiedPost[]`
+
+### `extractSpecialFields(fields)`
+
+Parses resolved custom fields to extract:
+- `product` — field whose label matches `/product/i`
+- `ghiId` — GitHub issue number (field matching `/ghi|github|escalated.*issue/i`; URL parsed to extract number)
+- `holdReason` — field matching `/hold.*reason|on.hold.*reason/i`
+- `jiraFields` — `Record<string, string>` of fields matching `/jira|jia/i` with values matching JIRA key format (`[A-Z]+-\d+`)
+
+### `extractTeam(tags)`
+
+Returns `"PS"` if `tags.includes('bu_ps')`, `"BU"` if `tags.includes('bu_other')`, otherwise `null`.
+
+### Shape Converters
+
+| Function | Description |
+|---|---|
+| `dbTicketToRow(t)` | Prisma Ticket record → `TicketRow` (API response shape) |
+| `dbPostToUnified(p)` | Prisma TicketPost record → `UnifiedPost` (API response shape) |
+| `ticketRowToKayakoCase(ticket)` | `TicketRow` → `KayakoCase` for AI analyser |
+| `dbPostsToKayakoPosts(posts)` | Prisma TicketPost[] → `KayakoPost[]` for AI analyser |
+
+---
+
 ## Posts Pagination
 
 The Kayako posts endpoint has a well-documented quirk: **the `offset` parameter is often ignored**. Sending `offset=200` may return the same first page as `offset=0`.
@@ -131,24 +177,29 @@ The strategy used (mirrors `get_all_posts` in the Python tool):
 3. **If `next_url` is absent but the batch was full**: increment offset manually as fallback
 4. **Deduplicate by post ID**: safety net in case offset is ignored and the same page comes back
 5. **Break if no new posts**: prevents infinite loops when offset is ignored
-6. **15-second timeout per request**: on timeout, partial results are returned with a warning banner
+6. **15-second timeout per request**: on timeout, partial results are returned with a warning string
 7. **Cap at `maxPosts=500`**: prevents runaway fetches for extremely large tickets
 
-```typescript
-// Simplified logic
-while (allPosts.length < maxPosts && url) {
-  const data = await fetch(url)                    // 15s timeout
-  const newPosts = batch.filter(p => !seenIds.has(p.id))
-  allPosts.push(...newPosts)
-  if (data.next_url) {
-    url = data.next_url                            // follow cursor
-  } else if (batch.length < pageSize || !newPosts.length) {
-    break                                          // done or stuck
-  } else {
-    params.offset = allPosts.length               // fallback increment
-  }
-}
-```
+---
+
+## Post Channel Resolution
+
+`resolvePostChannel(post: KayakoPost): string` — exported from `lib/kayako/ticketService.ts`. Called for every post in `fetchAndPersistTicket` to determine the channel value stored in `ticket_posts.channel`.
+
+**Why not `include=channel`?** Adding `include=channel` to the posts endpoint is silently ignored by Kayako — the channel field is always null regardless. The raw post JSON already contains all necessary fields without any includes:
+
+| Priority | Check | Result |
+|---|---|---|
+| 1 | `original.resource_type === 'side_conversation'` | `"SIDE_CONVERSATION"` |
+| 2 | `source_channel.type === 'NOTE'` or `original.resource_type === 'note'` | `"NOTE"` |
+| 3 | `is_requester === true` | `"CUSTOMER"` |
+| 4 | fallback | `source_channel.type \|\| "MAIL"` |
+
+These stored channel values drive the colour-coding in `ConversationThread`:
+- `"NOTE"` → yellow (internal note)
+- `"CUSTOMER"` → red (customer-visible)
+- `"SIDE_CONVERSATION"` → grey (side conversation, contents often empty)
+- anything else → blue (support reply)
 
 ---
 
@@ -163,7 +214,22 @@ Instead, after fetching posts, creator names are resolved in a separate pass:
 3. **Fetch in parallel** — `Promise.allSettled` calls `GET /api/v1/users/{id}` for each missing ID
 4. **Apply names** — replace each post's `creator` stub with the full user object from cache
 
-Individual user lookups fail silently: if a user can't be resolved, the post shows `ID:<number>` instead of a name.
+Individual user lookups fail silently: if a user can't be resolved, the post shows `—` instead of a name.
+
+---
+
+## BU/PS Sync Strategy
+
+The sync (`/api/bu-tickets/sync`) uses a different approach from `fetchAndPersistTicket` to avoid redundant API calls when syncing many tickets:
+
+1. **Pre-fetch shared data once** for all tickets: statuses, priorities, field definitions, and all SELECT option labels
+2. **Fetch case stubs** from view #64 via `getViewCases(64)`
+3. **Per-case enrichment** (batched 5 at a time): `getCaseRaw(id)` + `getCaseTags(id)` — lightweight, avoids the per-case status/priority/field-def lookups since those are already in the shared maps
+4. **No post fetch** — posts are synced separately via the background `sync-posts` job
+
+This means the sync is fast for large views (view #64 has ~90 tickets) and doesn't hit the rate limit from duplicate lookups.
+
+The post-fetch background job (`sync-posts`) uses **the same code path as individual ticket Refresh** — it calls `fetchAndPersistTicket()` directly. This guarantees that bulk sync and manual refresh always produce identical results. Any future changes to field mapping or post processing only need to be made in one place (`ticketService.ts`).
 
 ---
 
@@ -171,15 +237,20 @@ Individual user lookups fail silently: if a user can't be resolved, the post sho
 
 All requests use `AbortSignal.timeout(15_000)` — a Node.js 18+ built-in. No extra timeout packages needed.
 
-If a request times out, an `AbortError` is thrown. In `getAllPosts`, this is caught and converted to a warning string returned alongside partial results.
+The `KayakoClient` constructor accepts a `clientSignal` (the route handler's `request.signal`). These are combined: the request aborts on whichever fires first — the 15s per-request timeout or the client disconnect.
+
+For `fetchAndPersistTicket`, the outer timeout is set to 45s (`AbortSignal.timeout(45_000)`) when constructing the client, to allow time for case + posts + user resolution.
 
 ---
 
 ## API Routes That Use KayakoClient
 
-| Route | Method | What it does |
-|---|---|---|
-| `POST /api/ticket` | `authenticate` + `getCase` + `getAllPosts` + `resolveUsers` | Load ticket + all posts with names |
-| `POST /api/note` | `authenticate` + `addNote` | Post internal note |
+| Route | KayakoClient usage |
+|---|---|
+| `POST /api/ticket` | `authenticate` → `fetchAndPersistTicket` (via ticketService) |
+| `POST /api/bu-tickets/sync` | `authenticate` → `getViewCases` → `getCaseRaw` + `getCaseTags` per ticket |
+| `POST /api/bu-tickets/sync-posts` | `authenticate` → `fetchAndPersistTicket` per ticket (same code path as Refresh) |
+| `POST /api/bu-tickets/[id]/refresh` | `authenticate` → `fetchAndPersistTicket` (via ticketService) |
+| `POST /api/note` | `authenticate` → `addNote` |
 
-The analysis route (`/api/analysis`) does not call KayakoClient — it uses post data already in the request body, which was fetched by the ticket route.
+The analysis route (`/api/analysis`) does **not** call KayakoClient — it reads from the DB.

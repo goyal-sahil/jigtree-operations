@@ -1,10 +1,16 @@
 # JigTree Operations Hub — Vercel/Supabase App Plan
 
-## Status: Running — Phases 1–10 complete. Phase 11–12 (Hub + BU/PS Tickets) in spec.
+## Status: Running — Phases 1–14 complete. Phase 15 (Filter/Sort/Presets) planned, not started.
 
-Core Ticket Analyser confirmed working end-to-end.  
-App is live at **https://jigtree-operations.vercel.app** (GitHub: `goyal-sahil/jigtree-operations`).  
-Phases 11–12 spec is at `docs/bu-ps-tickets-spec.md`.
+Full feature set working end-to-end:
+- Ticket Analyser (DB-first, Refresh, Force re-run analysis)
+- BU/PS Tickets table (sync, filter, sort, admin delete)
+- BU/PS Ticket detail page (shared components, Refresh, AI analysis)
+- Unified DB schema (`tickets`, `ticket_posts`, `ticket_analyses`, `model_pricing`, `analysis_runs`)
+- Token tracking (`inputTokens` / `outputTokens`) + USD cost calculation from `model_pricing`
+- Analysis run history (`analysis_runs`) — append-only, orphan-safe, with cost columns in UI
+
+App is live at **https://jigtree-operations.vercel.app** (GitHub: `goyal-sahil/jigtree-operations`).
 
 The Streamlit tool at `C:\Users\sahil\CoWork\Central Kayako Tickets\` is **not modified** by this project.
 This is a clean rewrite as a multi-user web application.
@@ -1206,12 +1212,12 @@ Cache key: `(user_id, ticket_id, kayako_url)`. Cache is NOT auto-invalidated whe
   - [x] NavBar with email, settings link, sign out
   - [x] Deploy to Vercel (https://jigtree-operations.vercel.app)
   - [x] GitHub repo: goyal-sahil/jigtree-operations
-  - [ ] Mobile responsive (sm: Tailwind prefixes on grids)
+  - [x] Mobile responsive (sm: Tailwind prefixes on grids)
 - [x] Supabase: create project (JigTree Operations, ap-northeast-1)
 - [x] Google Cloud: create OAuth client (JigTree Operations (Vercel)), add redirect URIs
 - [x] Fill in `.env.local` and `.env` with all credentials
 - [x] Run `npm run db:push` — tables created in Supabase
-- [ ] Run RLS policies in Supabase SQL editor — still pending
+- [x] Run RLS policies in Supabase SQL editor — done (user_settings, ticket_analyses, bu_ps_* tables)
 - [x] Vercel: env vars set, GitHub connected, deployed
 
 ---
@@ -1220,11 +1226,11 @@ Cache key: `(user_id, ticket_id, kayako_url)`. Cache is NOT auto-invalidated whe
 
 **Spec:** `docs/bu-ps-tickets-spec.md` §2–3
 
-- [ ] Add `Sidebar.tsx` — collapsible left nav (icon + label, active route highlight, user footer)
-- [ ] Update `app/(dashboard)/layout.tsx` — sidebar + main content grid, retire NavBar
-- [ ] Move Ticket Analyser to `app/(dashboard)/analyser/page.tsx`
-- [ ] Add `HubPage.tsx` — tile grid component
-- [ ] Update `app/(dashboard)/page.tsx` — render Hub (first-login redirect to /settings preserved)
+- [x] Add `Sidebar.tsx` — collapsible left nav (icon + label, active route highlight, user footer)
+- [x] Update `app/(dashboard)/layout.tsx` — sidebar + main content grid, retire NavBar
+- [x] Move Ticket Analyser to `app/(dashboard)/analyser/page.tsx`
+- [x] Add `HubPage.tsx` — tile grid component
+- [x] Update `app/(dashboard)/page.tsx` — render Hub (first-login redirect to /settings preserved)
 
 ---
 
@@ -1234,26 +1240,56 @@ Cache key: `(user_id, ticket_id, kayako_url)`. Cache is NOT auto-invalidated whe
 **Kayako view:** https://central-supportdesk.kayako.com/agent/conversations/view/64
 
 #### 12.1 Database
-- [ ] Add `BuPsTicket`, `BuPsTicketPost`, `BuPsTicketCustomField` models to `prisma/schema.prisma`
-- [ ] Run `npm run db:push`
-- [ ] Run RLS SQL in Supabase (see spec §9)
+- [x] Add `BuPsTicket`, `BuPsTicketPost`, `BuPsTicketCustomField` models to `prisma/schema.prisma`
+- [x] Run `npm run db:push` — schema applied to Supabase
+- [x] Run RLS SQL in Supabase (see spec §9) — SELECT policies created for all 3 tables
 
 #### 12.2 Types & Client
-- [ ] Extend `types/kayako.ts` — add `KayakoOrganization`, `BuPsTicketRow`; add `organization` to `KayakoCase`
-- [ ] Add `getViewCases(viewId)` to `KayakoClient` — paginated view fetch with endpoint fallback
+- [x] Extend `types/kayako.ts` — add `KayakoOrganization`, `BuPsTicketRow`; add `organization` to `KayakoCase`
+- [x] Add `getViewCases(viewId)` to `KayakoClient` — paginated view fetch with endpoint fallback
 
 #### 12.3 API Routes
-- [ ] `app/api/bu-tickets/route.ts` — GET tickets from DB
-- [ ] `app/api/bu-tickets/sync/route.ts` — POST sync from Kayako (batched, upserts all 3 tables)
+- [x] `app/api/bu-tickets/route.ts` — GET tickets from DB
+- [x] `app/api/bu-tickets/sync/route.ts` — POST sync from Kayako (batched, upserts all 3 tables)
 
 #### 12.4 UI
-- [ ] `components/BUTicketsTable.tsx` — sortable/filterable table, Sync button, last-synced indicator
-- [ ] `app/(dashboard)/bu-tickets/page.tsx` — server component shell + client table
+- [x] `components/BUTicketsTable.tsx` — sortable/filterable table, Sync button, last-synced indicator
+- [x] `app/(dashboard)/bu-tickets/page.tsx` — server component shell + client table
 
 #### 12.5 Deploy & Test
-- [ ] Push to GitHub → auto-deploy
-- [ ] Test sync endpoint — confirm Kayako view API endpoint (`/api/v1/cases/views/64`)
-- [ ] Verify field mapping: Esc, Team, BU, GHI, JIRA, Hold Reason
+- [x] Push to GitHub → auto-deployed
+- [x] Sync endpoint working — Kayako view endpoint confirmed (`/api/v1/views/64/cases`)
+- [x] Field mapping verified: Esc, Team, BU, GHI, JIRA, Hold Reason
+
+### Phase 13 — Unified Architecture + Ticket Detail Page
+
+- [x] Unified `tickets` table replaces `BuPsTicket` (schema reset, `db:push` applied)
+- [x] Unified `ticket_posts` replaces `BuPsTicketPost`
+- [x] Unified `ticket_analyses` with `status` field (pending/running/done/error)
+- [x] `requesterKayakoId` and `customFields` added to `tickets` table
+- [x] `inputTokens` / `outputTokens` added to `ticket_analyses`
+- [x] `getCaseRaw` + `getCase` include `brand` + `fields=+tags`
+- [x] Brand name used as BU column (was `organization.name`, now `brand.name`)
+- [x] GHI extraction handles full GitHub URLs — extracts issue number
+- [x] `/api/bu-tickets/sync-posts` — background post-fetch job (10 tickets/run)
+- [x] `/api/bu-tickets/analyse-batch` — background AI analysis job (5 tickets/run)
+- [x] Sync triggers both background jobs client-side after completing
+- [x] `/api/bu-tickets/[id]` — GET single ticket + posts + analysis from DB
+- [x] `/api/bu-tickets/[id]/refresh` — POST re-fetch from Kayako, persist, return TicketResponse
+- [x] `/api/ticket` — now DB-first; persists ticket + posts to unified table
+- [x] `/api/analysis` — reads from DB (no longer accepts caseData/posts in body)
+- [x] `/api/credentials` — GET hasKayako / hasAnthropic booleans
+- [x] `lib/kayako/ticketService.ts` — single fetchAndPersistTicket service (Analyser + BU/PS refresh)
+- [x] AI prompt updated: bullet-point format, 4 sections + timeline
+- [x] `AIAnalysis.tsx` reworked: Lucide icons, card layout, pending/error states
+- [x] `TicketCard` — accepts `TicketRow`, `lastSyncedAt`, `onRefresh`, `refreshing`
+- [x] `ConversationThread` — accepts `UnifiedPost[]` + `requesterKayakoId`; filter toggles (Customer/Support/Note)
+- [x] `Timeline` — accepts `UnifiedPost[]` + `requesterKayakoId`
+- [x] `CredentialsBanner` component — shown on both Analyser and BU/PS pages
+- [x] `BUTicketsTable` — ID links to detail page, external Kayako icon link
+- [x] `/bu-tickets/[id]` detail page — shared components (TicketCard/ConversationThread/Timeline), tabs (AI/Timeline/Note), Refresh button
+- [x] Token tracking: `inputTokens` / `outputTokens` stored in `ticket_analyses`
+- [x] Deployed to Vercel — `ADMIN_EMAILS` env var added
 
 ### Runtime bugs fixed post-build
 - **Kayako 401 on case fetch**: Authorization header was not included in post-auth requests. Fixed by storing `authHeader` as instance property and including it in `headers()` on all calls.
@@ -1261,3 +1297,252 @@ Cache key: `(user_id, ticket_id, kayako_url)`. Cache is NOT auto-invalidated whe
 - **Supabase direct DB port blocked**: Corporate network blocks port 5432 on `db.xxx.supabase.co`. Switched `DIRECT_URL` to session mode pooler (`pooler.supabase.com:5432`).
 - **Anthropic 500 errors**: Transient server errors from Anthropic — retry resolves them.
 - **SELECT custom fields showing raw numeric IDs** (e.g. "7147" instead of "Discover XI"): The case response returns option IDs, not labels. Fixed by fetching `GET /api/v1/cases/fields/{fieldId}?include=field_option,locale_field` for each SELECT field to resolve option labels. `/api/v1/base/field/option/{id}` returns HTTP 400 for external API consumers and cannot be used. Added `KayakoCaseFieldDef` and `KayakoCustomField` types. `getCase()` now runs 4 parallel calls (case, statuses, priorities, field defs) plus N calls per SELECT field.
+
+---
+
+## Phase 14 — Post-launch fixes and polish
+
+- [x] **RLS policies**: Run in Supabase SQL editor for `tickets`, `ticket_posts`, `ticket_analyses`, `analysis_runs`, `model_pricing` tables — SQL written in `docs/setup.md § 4`
+- [x] **Anthropic retry on transient 500**: 1 retry after 2s in `analyseTicket()` — implemented
+- [x] **Token tracking in analyse-batch**: `inputTokens`/`outputTokens` added to the batch analysis upsert
+- [x] **Stale-data banner on BU/PS detail page**: shown when `postsStatus !== 'done'` and posts are empty, prompting Refresh
+- [x] **Escape key in TicketAnalyser**: clears input + ticket state
+- [x] **Post channel resolution fix**: `resolvePostChannel()` in `ticketService.ts` — uses `source_channel.type`, `original.resource_type`, `is_requester` from raw post JSON. `include=channel` was discovered to be silently ignored by Kayako.
+- [x] **HTML rendering for post contents**: `dangerouslySetInnerHTML` + `@tailwindcss/typography` `prose` styling in `ConversationThread`
+- [x] **Single code path for sync-posts**: `sync-posts/route.ts` now calls `fetchAndPersistTicket()` directly — identical to individual Refresh button
+- [x] **`requesterKayakoId` fixed in sync/route.ts**: `mapTicket` now includes `requesterKayakoId: caseData.requester?.id ?? null`
+- [x] **4-type filter toggles in ConversationThread**: Customer / Support / Internal Note / Side Conversation — only shows types present in the ticket
+- [x] **8-section AI prompt**: `one_liner`, `blocker_type`, `blocker_detail`, `path_to_closure`, `case_summary`, `customer_sentiment`, `what_needed`, `next_steps` — `oneLiner` + `blockerType` stored as dedicated DB columns
+- [x] **Analysis run history** (`analysis_runs` table): append-only log of every analysis attempt; `ticketId onDelete: SetNull` for orphan safety; `kayakoTicketId + kayakoUrl` for re-linking; auto-relink in `GET /api/bu-tickets/[id]`
+- [x] **USD cost calculation** (`lib/pricing.ts`, `model_pricing` table): date-range pricing rows seeded via `prisma/seed-pricing.sql`; `findPricing` + `computeCost` compute costs at query time; `AnalysisHistory` shows per-run and total costs
+- [x] **`AnalysisHistory` component**: collapsible table with 11 columns + cost tfoot; orphaned run labels
+- [x] **`TimezoneProvider` + `lib/tz.ts`**: browser timezone propagated via context; used for date formatting across all components
+
+## Future Phases
+
+- [ ] **Automated BU/PS sync**: Vercel cron job (every N hours) to trigger sync without manual click
+- [ ] **Additional Hub tiles**: Other tooling tiles as needed
+- [ ] **Mobile responsiveness**: `sm:` Tailwind breakpoints on remaining layouts
+- [ ] **Investigate organization/requesterName missing for some tickets**: Some BU/PS tickets show "—" for Customer (organization) and empty requester name after sync — may need API debug to confirm whether `include=organization` expands correctly
+
+---
+
+## Phase 15 — URL-Driven Filtering, Sorting & Saved Presets (BU/PS Tickets)
+
+**Spec:** `Spec/Filter-Sorting/` (README, IMPLEMENTATION-CHECKLIST, templates)
+
+**Decisions confirmed:**
+- All 8 filter dimensions (search, team, status, priority, blocker type, age risk, product, escalated)
+- Server-side Prisma query — page becomes a Server Component
+- Private + Shared preset visibility
+
+**Architecture overview:**
+The BU/PS Tickets page converts from a client-component-fetch model to a Next.js App Router Server Component. URL is the single source of truth for all filter/sort/page state. Sync and delete remain client-side (`router.refresh()` triggers server re-render after mutations).
+
+---
+
+### 15.1 — Database
+
+- [ ] Add `FilterPreset` model to `prisma/schema.prisma`
+  - Fields: `id`, `userId`, `module` (= `"bu-tickets"`), `name`, `queryString` (canonical), `isDefault`, `includeViewInIdentity`, `visibility` (`PRIVATE` | `SHARED`), `createdAt`, `updatedAt`
+  - Relation: → `UserSettings` via `userId` + `onDelete: Cascade`
+  - Unique: `(userId, module, name)`
+  - Indexes: `(userId, module, isDefault)`, `(userId, module, createdAt)`
+- [ ] Add `FilterPresetVisibility` enum to schema
+- [ ] `npm run db:push` (stop dev server first)
+- [ ] `npm run db:generate`
+
+---
+
+### 15.2 — Filter Type Layer  *(client-safe — no Prisma import)*
+
+**New file: `lib/bu-tickets-list-filters.ts`**
+
+- [ ] `BuTicketsSortValue` — allowlist of valid sort strings:
+  - `updated_desc` (default), `updated_asc`
+  - `created_desc`, `created_asc`
+  - `age_desc` (most days open first), `age_asc`
+  - `id_desc`, `id_asc`
+  - `title_asc`, `title_desc`
+  - `customer_asc`, `customer_desc`
+- [ ] `BuTicketsListFilters` type:
+  ```ts
+  {
+    q:             string         // text search: ID, title, customer, product, requester
+    team:          string[]       // 'PS' | 'BU'
+    status:        string[]       // 'open' | 'pending' | 'closed' | etc.
+    priority:      string[]       // 'urgent' | 'high' | 'normal'
+    blockerType:   string[]       // 'Action:*' | 'Waiting: Engineering' | etc.
+    ageRisk:       string[]       // 'AT RISK' | 'WATCH' | 'OK'
+    product:       string[]       // free-form values from DB
+    escalatedOnly: boolean
+    sort:          BuTicketsSortValue
+    page:          number
+    pageSize:      25 | 50 | 100
+  }
+  ```
+- [ ] `parseBuTicketsSearchParams(raw)` — parse + validate all fields with safe defaults
+- [ ] `serializeBuTicketsParams(f)` — serialize to query string, omitting all defaults
+- [ ] `normalizeBuTicketsPresetQS(qs)` — canonicalize: parse → page=1 → serialize
+- [ ] `buTicketsFilterSignature(f)` — canonical string used to detect active preset
+- [ ] `urlSearchParamsToRecord(sp)` — shared helper (same pattern as template)
+
+---
+
+### 15.3 — Server Query Layer  *(server-only — `import 'server-only'`)*
+
+**New file: `lib/bu-tickets-list-query.ts`**
+
+- [ ] `buildBuTicketsWhere(f, userId, kayakoUrl)` — Prisma `WhereInput` from all filter dimensions:
+  | Filter | Prisma condition |
+  |---|---|
+  | `q` | `title`, `organization`, `kayakoTicketId`, `product`, `requesterName` — `contains` INSENSITIVE |
+  | `team` | `team: { in: f.team }` |
+  | `status` | `status: { in: f.status, mode: 'insensitive' }` |
+  | `priority` | `priority: { in: f.priority, mode: 'insensitive' }` |
+  | `blockerType` | `analyses: { some: { userId, blockerType: { in: f.blockerType } } }` |
+  | `ageRisk` | `kayakoCreatedAt` date range (AT RISK ≥30d / WATCH ≥20d <30d / OK <20d) — OR over selected values |
+  | `product` | `product: { in: f.product }` |
+  | `escalatedOnly` | `isEscalated: true` |
+  | always | `isBuPs: true`, `kayakoUrl: kayakoUrl` |
+
+- [ ] `orderByBuTickets(sort)` — validated Prisma `orderBy` array (DB fields only; tie-breaker `id ASC`)
+  - Note: `blockerType` sort is not supported server-side (in joined table); omit from sort options
+- [ ] `fetchBuTicketsPage(prisma, f, userId, kayakoUrl)` → `{ tickets: TicketRow[], total: number, effectivePage: number }`
+  - COUNT query for total
+  - Paginated `findMany` with WHERE + orderBy + skip/take
+  - Include `analyses: { where: { userId }, select: { blockerType, oneLiner, updatedAt } }` for table columns
+  - Map to `TicketRow` via `dbTicketToRow` with analysis extras
+- [ ] `fetchBuTicketsFilterOptions(prisma, kayakoUrl)` → distinct values for dynamic dropdowns:
+  - `products: string[]` — distinct non-null product values
+  - `statuses: string[]` — distinct non-null status values
+
+---
+
+### 15.4 — Server Actions  *(per-user preset CRUD)*
+
+**New file: `app/actions/bu-ticket-filter-presets.actions.ts`**
+
+- [ ] `createBuTicketFilterPreset(input)` — validate with zod, canonicalize QS, insert; optionally set as default (in transaction); `revalidatePath('/bu-tickets')`
+- [ ] `renameBuTicketFilterPreset(id, userId, name)` — update name; guard userId ownership
+- [ ] `deleteBuTicketFilterPreset(id, userId)` — delete; guard userId ownership
+- [ ] `setDefaultBuTicketFilterPreset(id, userId)` — transaction: clear all module defaults → set this one
+- [ ] `clearDefaultBuTicketFilterPreset(userId)` — transaction: clear all module defaults
+- All actions revalidate `/bu-tickets`
+
+---
+
+### 15.5 — Page Restructure  *(Server Component)*
+
+**Rewrite: `app/(dashboard)/bu-tickets/page.tsx`**
+
+- [ ] Convert to `async` Server Component — accepts `{ searchParams }` prop
+- [ ] Parse filters: `parseBuTicketsSearchParams(await searchParams)`
+- [ ] Auth + load `kayakoUrl` from `prisma.userSettings`
+- [ ] Fetch in parallel:
+  - `fetchBuTicketsPage(...)` — tickets for current filter/page
+  - `prisma.filterPreset.findMany(...)` — user's own presets + all SHARED presets
+  - `fetchBuTicketsFilterOptions(...)` — distinct product + status values for dropdowns
+  - `prisma.userSettings.findUnique(...)` — for `isAdmin` check
+- [ ] Render layout:
+  ```
+  <BUTicketsToolbar />          ← Client Component (sync, delete, last-synced)
+  <BUTicketsFilters />           ← Client Component (GET form)
+  <BUTicketsFilterPresetsToolbar /> ← Client Component (save/load presets)
+  <BUTicketsTable />             ← Client Component (display + pagination links)
+  ```
+- [ ] Remove `fetchTickets()` client-side fetch — data now comes from server
+
+---
+
+### 15.6 — New UI Components
+
+**New: `components/BUTicketsFilters.tsx`**
+- [ ] `'use client'` — collapsible panel (closed by default)
+- [ ] Header shows active filter count badge when filters are set
+- [ ] `<form method="GET">` — submits to current path, no JS required for basic use
+- [ ] Hidden `<input name="page" value="1" />` — resets to page 1 on filter change
+- [ ] Controls:
+  - Text search input (`name="q"`)
+  - Team checkboxes: PS, BU
+  - Status checkboxes: dynamic from `statusOptions` prop
+  - Priority checkboxes: Urgent, High, Normal
+  - Blocker type checkboxes: Action, Waiting: Engineering, Waiting: Customer, Waiting: 3rd Party, Ready to Close, None
+  - Age Risk checkboxes: AT RISK, WATCH, OK
+  - Product checkboxes: dynamic from `productOptions` prop
+  - Escalated only toggle
+  - Sort select: all `BU_TICKETS_SORT_OPTIONS`
+  - Page size: 25 / 50 / 100
+- [ ] Apply button (submit) + Clear filters link (href to bare `/bu-tickets`)
+- [ ] Active filter pills shown above table (each pill links to URL minus that filter)
+
+**New: `components/BUTicketsFilterPresetsToolbar.tsx`**
+- [ ] `'use client'` — uses `useTransition` + `useRouter`
+- [ ] Preset dropdown (own presets + shared presets, grouped; default marked with ★)
+- [ ] Name input + "Save" button → calls `createBuTicketFilterPreset` server action
+- [ ] "Set as default" / "Clear default" buttons for active preset
+- [ ] "Delete" button (own presets only)
+- [ ] Active preset highlight — detected via `buTicketsFilterSignature()` comparison
+- [ ] "Include view in identity" checkbox (per spec)
+- [ ] Shared preset badge on non-owned presets
+
+**New: `components/BUTicketsToolbar.tsx`**  *(extracted from BUTicketsTable)*
+- [ ] `'use client'` — handles sync + delete (existing logic)
+- [ ] On sync success: `router.refresh()` — triggers Server Component re-render
+- [ ] On delete success: `router.refresh()`
+- [ ] Shows last-synced relative time + sync status message
+
+---
+
+### 15.7 — Refactor `BUTicketsTable`
+
+- [ ] Remove: `filter` state, `filtered` useMemo, `sorted` useMemo, `pageSize` state, page size controls
+- [ ] Remove: `sortKey` / `sortDir` state, `handleSort` (sort now via URL links)
+- [ ] Remove: inline `SpinnerIcon`, sync controls, delete controls (moved to `BUTicketsToolbar`)
+- [ ] Add: sort-link column headers — `<a href={buTicketsSortHref(currentQS, col.sortValue)}>` with ↑↓ indicator
+- [ ] Add: pagination footer — Prev / Next links + "Showing X–Y of Z" using `serializeBuTicketsParams`
+- [ ] Props change: `tickets: TicketRow[]`, `totalCount: number`, `currentPage: number`, `pageSize: number`, `currentQueryString: string`, `isAdmin: boolean`, `onDelete: (ids) => Promise<void>`
+- [ ] Keep: row rendering, admin checkboxes, delete selection, all existing cell renderers
+
+---
+
+### 15.8 — Shared Presets
+
+- [ ] `GET /api/bu-tickets` still works for any client-side needs (keep existing route)
+- [ ] Shared presets fetched on page load alongside own presets:
+  ```ts
+  prisma.filterPreset.findMany({
+    where: {
+      module: 'bu-tickets',
+      OR: [{ userId: user.id }, { visibility: 'SHARED' }]
+    }
+  })
+  ```
+- [ ] Preset toolbar groups: "My Presets" vs "Shared Presets"
+- [ ] Non-owners see shared presets as read-only (no delete/rename)
+
+---
+
+### 15.9 — Cleanup & Deploy
+
+- [ ] Update `CLAUDE.md` — new files, architecture change for BU/PS page
+- [ ] Update `docs/components.md` — new + refactored components
+- [ ] Update `docs/api-routes.md` — remove GET /api/bu-tickets dependency from page render
+- [ ] `npm run build` — verify no TypeScript errors
+- [ ] Deploy to Vercel (`git push origin main`)
+
+---
+
+### File Map for Phase 15
+
+| New / Changed | Path |
+|---|---|
+| NEW | `lib/bu-tickets-list-filters.ts` |
+| NEW | `lib/bu-tickets-list-query.ts` |
+| NEW | `app/actions/bu-ticket-filter-presets.actions.ts` |
+| NEW | `components/BUTicketsFilters.tsx` |
+| NEW | `components/BUTicketsFilterPresetsToolbar.tsx` |
+| NEW | `components/BUTicketsToolbar.tsx` |
+| REWRITE | `app/(dashboard)/bu-tickets/page.tsx` |
+| REFACTOR | `components/BUTicketsTable.tsx` |
+| CHANGE | `prisma/schema.prisma` |

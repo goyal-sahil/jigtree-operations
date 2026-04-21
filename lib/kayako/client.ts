@@ -16,9 +16,34 @@ export class KayakoClient {
   private sessionId = ''
   private csrfToken = ''
   private authHeader = ''
+  private clientSignal?: AbortSignal
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, clientSignal?: AbortSignal) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
+    this.clientSignal = clientSignal
+  }
+
+  /**
+   * Returns a signal that aborts on whichever fires first:
+   * the 15 s per-request timeout, or the caller's cancellation signal.
+   * Uses AbortSignal.any() on Node 20+; falls back to a manual combiner.
+   */
+  private makeSignal(): AbortSignal {
+    const timeout = AbortSignal.timeout(15_000)
+    if (!this.clientSignal) return timeout
+    if (typeof (AbortSignal as { any?: unknown }).any === 'function') {
+      return (AbortSignal as { any: (s: AbortSignal[]) => AbortSignal }).any([this.clientSignal, timeout])
+    }
+    // Node 18 fallback — manual combiner
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    if (this.clientSignal.aborted || (timeout as unknown as { aborted: boolean }).aborted) {
+      controller.abort()
+    } else {
+      this.clientSignal.addEventListener('abort', abort, { once: true })
+      timeout.addEventListener('abort', abort, { once: true })
+    }
+    return controller.signal
   }
 
   async authenticate(email: string, password: string): Promise<void> {
@@ -29,7 +54,7 @@ export class KayakoClient {
         Authorization: this.authHeader,
         Accept: 'application/json',
       },
-      signal: AbortSignal.timeout(15_000),
+      signal: this.makeSignal(),
     })
 
     if (!resp.ok) {
@@ -82,7 +107,7 @@ export class KayakoClient {
     }
     const resp = await fetch(url.toString(), {
       headers: this.headers(),
-      signal: AbortSignal.timeout(15_000),
+      signal: this.makeSignal(),
     })
     if (!resp.ok) throw new Error(`Kayako GET ${path} failed: HTTP ${resp.status}`)
     return resp.json() as Promise<T>
@@ -93,7 +118,7 @@ export class KayakoClient {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
+      signal: this.makeSignal(),
     })
     if (!resp.ok) throw new Error(`Kayako POST ${path} failed: HTTP ${resp.status}`)
     return resp.json() as Promise<T>
@@ -101,9 +126,36 @@ export class KayakoClient {
 
   // ── Ticket ────────────────────────────────────────────────────────────────
 
+  /** Fetch a single case without shared lookups — caller supplies pre-fetched statuses/priorities/fieldDefs. */
+  async getCaseRaw(caseId: number): Promise<{ data: KayakoCase }> {
+    return this.get(`/api/v1/cases/${caseId}`, { include: 'user,team,organization,brand' })
+  }
+
+  /** Fetch organisation name by ID. Returns null on failure (fail-silent). */
+  async getOrganizationName(orgId: number): Promise<string | null> {
+    try {
+      const resp = await this.get<{ data: { id: number; name?: string; title?: string; titles?: Array<{ translation?: string }> } }>(
+        `/api/v1/organizations/${orgId}`,
+      )
+      return resp.data?.name ?? resp.data?.title ?? resp.data?.titles?.[0]?.translation ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** Fetch tags for a case. Returns empty array on failure. */
+  async getCaseTags(caseId: number): Promise<string[]> {
+    try {
+      const resp = await this.get<{ data: Array<{ name?: string }> }>(`/api/v1/cases/${caseId}/tags`)
+      return (resp.data ?? []).map(t => t.name ?? '').filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+
   async getCase(caseId: number): Promise<{ data: KayakoCase }> {
     const [caseResp, statuses, priorities, fieldDefs] = await Promise.allSettled([
-      this.get<{ data: KayakoCase }>(`/api/v1/cases/${caseId}`, { include: 'user,team' }),
+      this.get<{ data: KayakoCase }>(`/api/v1/cases/${caseId}`, { include: 'user,team,organization,brand', fields: '+tags' }),
       this.get<{ data: Array<{ id: number; label?: string; name?: string }> }>('/api/v1/cases/statuses'),
       this.get<{ data: Array<{ id: number; label?: string; name?: string }> }>('/api/v1/cases/priorities'),
       this.get<{ data: KayakoCaseFieldDef[] }>('/api/v1/cases/fields'),
@@ -112,6 +164,18 @@ export class KayakoClient {
     if (caseResp.status === 'rejected') throw caseResp.reason
 
     const caseData = caseResp.value.data
+
+    // Kayako returns tags as objects when using fields=+tags; normalize to strings
+    if (Array.isArray(caseData.tags)) {
+      caseData.tags = (caseData.tags as unknown[]).map(t => {
+        if (typeof t === 'string') return t
+        if (t && typeof t === 'object') {
+          const o = t as Record<string, unknown>
+          return String(o.name ?? o.tag ?? o.label ?? '')
+        }
+        return ''
+      }).filter(Boolean)
+    }
 
     if (statuses.status === 'fulfilled') {
       const match = statuses.value.data?.find(s => s.id === caseData.status?.id)
@@ -204,6 +268,11 @@ export class KayakoClient {
         .filter((f): f is KayakoCustomField => f !== null)
     }
 
+    if (fieldDefs.status !== 'fulfilled') {
+      // Field defs unavailable — drop raw stubs to prevent rendering objects
+      caseData.custom_fields = []
+    }
+
     return { data: caseData }
   }
 
@@ -233,7 +302,7 @@ export class KayakoClient {
       try {
         const resp = await fetch(fullUrl, {
           headers: this.headers(),
-          signal: AbortSignal.timeout(15_000),
+          signal: this.makeSignal(),
         })
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
         data = await resp.json()
@@ -303,6 +372,35 @@ export class KayakoClient {
       ...post,
       creator: cache.get(post.creator?.id) ?? post.creator,
     }))
+  }
+
+  // ── View / BU-PS Tickets ─────────────────────────────────────────────────
+
+  /**
+   * Fetch all case stubs in a Kayako view via GET /api/v1/views/{viewId}/cases.
+   * Follows next_url pagination until exhausted.
+   */
+  async getViewCases(viewId: number): Promise<KayakoCase[]> {
+    const allCases: KayakoCase[] = []
+    const seenIds = new Set<number>()
+    let url: string | null = `${this.baseUrl}/api/v1/views/${viewId}/cases?limit=200`
+    let page = 1
+
+    while (url) {
+      const resp = await fetch(url, { headers: this.headers(), signal: this.makeSignal() })
+      if (!resp.ok) throw new Error(`View cases fetch failed: HTTP ${resp.status}`)
+      const data = await resp.json() as { data: KayakoCase[]; next_url?: string }
+      const batch = data.data ?? []
+      const newCases = batch.filter(c => !seenIds.has(c.id))
+      newCases.forEach(c => { seenIds.add(c.id); allCases.push(c) })
+      console.log(`[getViewCases] Page ${page}: ${batch.length} cases (${newCases.length} new), next_url=${data.next_url ? 'yes' : 'no'}`)
+      if (!data.next_url || newCases.length === 0) break
+      url = data.next_url.startsWith('http') ? data.next_url : `${this.baseUrl}${data.next_url}`
+      page++
+    }
+
+    console.log(`[getViewCases] Total unique cases: ${allCases.length}`)
+    return allCases
   }
 
   // ── Note ──────────────────────────────────────────────────────────────────

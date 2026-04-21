@@ -9,20 +9,23 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await request.json() as {
-    kayako_url:      string
-    kayako_email:    string
+    kayako_url:       string
+    kayako_email:     string
     kayako_password?: string
-    anthropic_key?:  string
+    anthropic_key?:   string
+    timezone?:        string
   }
 
   const payload: {
-    kayakoUrl:        string | null
-    kayakoEmail:      string | null
+    kayakoUrl:         string | null
+    kayakoEmail:       string | null
+    timezone:          string
     kayakoPasswordEnc?: string
     anthropicKeyEnc?:   string
   } = {
     kayakoUrl:   body.kayako_url?.trim()   || null,
     kayakoEmail: body.kayako_email?.trim() || null,
+    timezone:    body.timezone?.trim()     || 'UTC',
   }
 
   if (body.kayako_password?.trim()) {
@@ -47,9 +50,9 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const settings = await prisma.userSettings.findUnique({
-    where: { userId: user.id },
-    select: { kayakoUrl: true, kayakoEmail: true },
+    where:  { userId: user.id },
+    select: { kayakoUrl: true, kayakoEmail: true, timezone: true },
   })
 
-  return NextResponse.json(settings ?? {})
+  return NextResponse.json(settings ?? { timezone: 'UTC' })
 }

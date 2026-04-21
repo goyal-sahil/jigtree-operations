@@ -1,8 +1,3 @@
-/**
- * Anthropic Claude analysis — TypeScript port of analyse_ticket_with_ai() from kayako_tool.py
- * Prompt, section headings, and model selection logic are identical to the Streamlit tool.
- */
-
 import Anthropic from '@anthropic-ai/sdk'
 import type { KayakoCase, KayakoPost, AnalysisResult, AnalysisSections } from '@/types/kayako'
 import { getPostText, safeLabel } from '@/lib/utils'
@@ -57,23 +52,36 @@ function parseSections(raw: string): AnalysisSections & { day_summaries_raw: str
     const body    = nl < 0 ? '' : part.slice(nl + 1).trim()
     map[heading] = body
   }
+
+  // Parse structured Blocker section
+  const blockerRaw = map['Blocker'] ?? ''
+  let blocker_type   = ''
+  let blocker_detail = ''
+  for (const line of blockerRaw.split('\n')) {
+    const t = line.trim()
+    if (t.startsWith('Type:'))   blocker_type   = t.slice(5).trim()
+    if (t.startsWith('Detail:')) blocker_detail = t.slice(7).trim()
+  }
+
   return {
-    executive_summary:  map['Executive Summary'] ?? '',
-    one_line:           map['One-Line Summary'] ?? '',
+    one_liner:          map['One-liner'] ?? '',
+    blocker_type,
+    blocker_detail,
+    path_to_closure:    map['Path to Closure'] ?? '',
     case_summary:       map['Case Summary'] ?? '',
     customer_sentiment: map['Customer Sentiment'] ?? '',
-    what_needed:        map["What's Needed to Close This Ticket"] ?? '',
-    next_steps:         map['Recommended Next Steps'] ?? '',
-    day_summaries_raw:  map['Day-by-Day Summary'] ?? '',
+    what_needed:        map["What's Needed to Close"] ?? '',
+    next_steps:         map['Next Steps'] ?? '',
+    day_summaries_raw:  map['Timeline'] ?? '',
   }
 }
 
 function parseDaySummaries(raw: string): Record<string, string> {
   const result: Record<string, string> = {}
   for (const line of raw.split('\n')) {
-    const t = line.trim()
-    if (/^\d{4}-\d{2}-\d{2}:/.test(t)) {
-      const i = t.indexOf(':')
+    const t = line.trim().replace(/^[-•]\s*/, '')
+    if (/^\d{4}-\d{2}-\d{2}[:\s]/.test(t)) {
+      const i = t.search(/[:\s]/)
       result[t.slice(0, i).trim()] = t.slice(i + 1).trim()
     }
   }
@@ -88,40 +96,52 @@ export async function analyseTicket(
   const model  = detectModel(caseData, posts)
   const client = new Anthropic({ apiKey })
 
-  const subject   = caseData.subject ?? 'No subject'
-  const requester = caseData.requester?.full_name ?? caseData.requester?.name ?? '—'
-  const status    = safeLabel(caseData.status as Record<string, unknown>)
-  const tags      = caseData.tags?.join(', ') || '—'
-  const createdAt = (caseData.created_at ?? '').slice(0, 10)
+  const subject      = caseData.subject ?? 'No subject'
+  const requester    = caseData.requester?.full_name ?? caseData.requester?.name ?? '—'
+  const status       = safeLabel(caseData.status as Record<string, unknown>)
+  const tags         = caseData.tags?.join(', ') || '—'
+  const createdAt    = (caseData.created_at ?? '').slice(0, 10)
+  const ageDays      = caseData.created_at
+    ? Math.floor((Date.now() - new Date(caseData.created_at).getTime()) / 86_400_000)
+    : null
   const conversation = buildConversationBlock(posts)
 
-  const systemPrompt = `You are a senior customer support analyst. You read full support ticket histories — including internal notes that the customer cannot see — and produce clear, actionable analysis for support agents. Be concise, specific, and professional. Use markdown formatting.`
+  const systemPrompt = `You are a senior customer support analyst. Produce concise, scannable analysis for support managers. Always use bullet points — never long prose paragraphs. Be specific and actionable. Every item must be concrete — no vague statements like "follow up with customer".`
 
-  const userPrompt = `Analyse this support ticket and return EXACTLY these seven sections with these headings:
+  const userPrompt = `Analyse this support ticket. Return EXACTLY these sections with these headings, in order. Use bullet points throughout.
 
-## Executive Summary
-One short paragraph (3–4 sentences) a manager could read in 10 seconds to understand the full situation: the issue, current state, and urgency.
+## One-liner
+A single sentence (10–15 words) stating the core issue. Example: "Customer's CSV export fails on all report types since the v3.2 update."
 
-## One-Line Summary
-A single sentence (max 20 words) describing what this ticket is about.
+## Blocker
+Type: [pick exactly one: Action: Support | Waiting: Engineering | Waiting: Customer | Waiting: 3rd Party | Ready to Close]
+Detail: [one sentence — what specifically is blocking closure right now]
+
+## Path to Closure
+Numbered steps to close this ticket. Format each step as: "N. [Owner] Action — timing if known"
+Owners: Support / Engineering / Customer / Management. Max 5 steps. Be concrete.
 
 ## Case Summary
-A concise 3–5 sentence overview of the issue: what the customer reported, what has been tried, and where things stand now.
+Bullet points covering:
+- Issue: what the customer reported
+- Root cause: what's causing it (if known)
+- Impact: who/what is affected
+- Current state: where things stand right now
 
 ## Customer Sentiment
-One sentence on the customer's emotional state (e.g. frustrated, patient, confused, angry). Then 1–2 sentences explaining what's driving that sentiment based on the conversation.
+Start with a one-line label (e.g. "Frustrated and escalating"). Then bullet points:
+- What's driving their sentiment
+- Any specific moments that worsened or improved it
 
-## What's Needed to Close This Ticket
-A bullet-point list of the specific conditions or actions that must be completed before this ticket can be resolved and closed. Be precise — no vague items.
+## What's Needed to Close
+Bullet list of specific actions or conditions required to close this ticket. Each bullet = one concrete action. No vague items.
 
-## Recommended Next Steps
-A numbered action plan for the support agent. Order by priority. Include who is responsible for each step where relevant.
+## Next Steps
+Numbered list ordered by priority. Format: "N. [Action] — [Owner]"
 
-## Day-by-Day Summary
-For each date that has activity, write exactly one sentence summarising what happened that day.
-Format each line exactly as (no extra text, no bullets):
-YYYY-MM-DD: [one sentence summary]
-List dates in chronological order.
+## Timeline
+One line per active date, chronological. Format exactly:
+YYYY-MM-DD: [one sentence of what happened that day]
 
 ---
 
@@ -129,36 +149,49 @@ TICKET METADATA
 - Subject: ${subject}
 - Requester: ${requester}
 - Status: ${status}
-- Tags / Category: ${tags}
-- Created: ${createdAt}
+- Tags: ${tags}
+- Created: ${createdAt}${ageDays !== null ? ` (${ageDays} days ago)` : ''}
 - Total posts: ${posts.length}
 
 FULL CONVERSATION HISTORY
-(Internal notes are marked [INTERNAL — not visible to customer]. Customer-facing posts are marked [Customer-visible].)
+(Internal notes are [INTERNAL — not visible to customer]. Customer-facing posts are [Customer-visible].)
 
 ${conversation}`
 
-  const response = await client.messages.create({
+  const createParams = {
     model,
-    max_tokens: 2000,
+    max_tokens: 2500,
     system: systemPrompt,
-    messages: [{ role: 'user', content: userPrompt }],
+    messages: [{ role: 'user' as const, content: userPrompt }],
+  }
+
+  const response = await client.messages.create(createParams).catch(async (err: unknown) => {
+    if ((err as { status?: number }).status === 500) {
+      await new Promise(r => setTimeout(r, 2000))
+      return client.messages.create(createParams)
+    }
+    throw err
   })
 
-  const raw = response.content[0].type === 'text' ? response.content[0].text : ''
+  const raw    = response.content[0].type === 'text' ? response.content[0].text : ''
   const parsed = parseSections(raw)
 
   return {
     sections: {
-      executive_summary:  parsed.executive_summary,
-      one_line:           parsed.one_line,
+      one_liner:          parsed.one_liner,
+      blocker_type:       parsed.blocker_type,
+      blocker_detail:     parsed.blocker_detail,
+      path_to_closure:    parsed.path_to_closure,
       case_summary:       parsed.case_summary,
       customer_sentiment: parsed.customer_sentiment,
       what_needed:        parsed.what_needed,
       next_steps:         parsed.next_steps,
     },
-    day_summaries: parseDaySummaries(parsed.day_summaries_raw),
-    model_used: model,
-    post_count: posts.length,
+    day_summaries:  parseDaySummaries(parsed.day_summaries_raw),
+    model_used:     model,
+    post_count:     posts.length,
+    input_tokens:   response.usage.input_tokens,
+    output_tokens:  response.usage.output_tokens,
+    status:         'done',
   }
 }
