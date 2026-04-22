@@ -87,7 +87,7 @@ Unified ticket cache used by both the Ticket Analyser and BU/PS sync. A ticket i
 
 Unique constraint: `(kayakoTicketId, kayakoUrl)`
 
-Relations: `posts TicketPost[]`, `analyses TicketAnalysis[]`, `analysisRuns AnalysisRun[]`
+Relations: `posts TicketPost[]`, `analyses TicketAnalysis[]`, `analysisRuns AnalysisRun[]`, `exports TicketExport[]`
 
 ---
 
@@ -166,7 +166,7 @@ Stores Anthropic API pricing rates per model per time period. Managed directly i
 
 ### `AnalysisRun` → table `analysis_runs`
 
-Append-only log of every AI analysis attempt. One new row is added on every analysis run (success or error). Rows survive ticket deletion (`ticketId` → `null`).
+Append-only log of every Anthropic API call — both analysis runs and markdown export generation. One new row is added on every attempt (success or error). Rows survive ticket deletion (`ticketId` → `null`).
 
 | Column | Type | Notes |
 |---|---|---|
@@ -176,8 +176,9 @@ Append-only log of every AI analysis attempt. One new row is added on every anal
 | `kayakoTicketId` | Int | Kayako integer ticket ID — used for re-linking orphans |
 | `kayakoUrl` | String | Kayako base URL — combined with kayakoTicketId for uniqueness |
 | `trigger` | String | `"manual"` / `"batch"` / `"forced"` |
+| `runType` | String | `"analysis"` (AI analysis) or `"download"` (markdown export) — default `"analysis"` |
 | `modelUsed` | String? | Full model ID e.g. `"claude-haiku-4-5-20251001"` |
-| `postCount` | Int? | Posts analysed |
+| `postCount` | Int? | Posts analysed (null for download runs) |
 | `inputTokens` | Int? | Anthropic input token count |
 | `outputTokens` | Int? | Anthropic output token count |
 | `durationMs` | Int? | Wall time for the Anthropic call |
@@ -188,6 +189,32 @@ Append-only log of every AI analysis attempt. One new row is added on every anal
 **Orphan preservation**: `ticketId` uses `onDelete: SetNull`. When a ticket is deleted, `analysis_runs` rows are retained with `ticketId = null`. The `GET /api/bu-tickets/[id]` route auto-relinks orphaned rows by `kayakoTicketId + kayakoUrl` when the same ticket is re-imported.
 
 **No `analysisRuns` relation on `UserSettings`** — all run queries filter by `userId` directly on `analysis_runs`.
+
+---
+
+### `TicketExport` → table `ticket_exports`
+
+Cached markdown export per user per ticket. One record per user per ticket (upserted on each generation).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `ticketId` | UUID | FK → `tickets.id` (cascade delete) |
+| `userId` | UUID | FK → `user_settings.userId` (cascade delete) |
+| `markdownContent` | Text | The full generated `.md` file content |
+| `modelUsed` | String? | Claude model used for the Overview section |
+| `inputTokens` | Int? | Anthropic input token count (Overview call only) |
+| `outputTokens` | Int? | Anthropic output token count |
+| `status` | String | `"pending"` / `"running"` / `"done"` / `"error"` |
+| `errorMsg` | String? | Error detail if status is `"error"` |
+| `createdAt` | DateTime | Row creation time |
+| `updatedAt` | DateTime | Auto-updated (used as the export timestamp shown in UI) |
+
+Unique constraint: `(ticketId, userId)` — one cached export per user per ticket.
+
+On re-generation (`forceRefresh=true`), the route does an `upsert` which overwrites the existing row.
+
+**Structure of generated markdown**: Header → metadata table → tags → custom fields → Jira refs → AI Analysis sections (if available) → full conversation (all posts, no truncation). Claude generates only the "Overview" bullets section (max 400 tokens). All other content is built programmatically in TypeScript.
 
 ---
 

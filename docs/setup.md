@@ -70,6 +70,8 @@ npm run db:studio
 
 ## 4. Set Up Row-Level Security (RLS)
 
+> **Status (v1.0.0): All policies below have been applied to the production Supabase project.** This section is kept for reference and for new deployments.
+
 In the Supabase SQL editor, run these policies so users can only read/write their own rows:
 
 ```sql
@@ -214,3 +216,6 @@ And add `https://your-app.vercel.app/auth/callback` to the Google OAuth allowed 
 
 **Sync endpoint returns: `Database client is out of date`**
 - Same as above — run `npm run db:generate`.
+
+**TypeScript errors from files inside `Spec/`**
+- `tsconfig.json` explicitly excludes the `Spec/` directory. If you add a new `tsconfig.json` or reset it, ensure `"Spec"` remains in the `exclude` array. The `Spec/` folder contains planning templates and is not production code.

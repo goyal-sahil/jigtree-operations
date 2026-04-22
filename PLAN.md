@@ -1,14 +1,15 @@
 # JigTree Operations Hub — Vercel/Supabase App Plan
 
-## Status: Running — Phases 1–14 complete. Phase 15 (Filter/Sort/Presets) planned, not started.
+## Status: v1.0.0 live — Phases 1–15 complete + post-launch fixes + Phase 17.1 (Admin). Phase 16 (Notion Portfolio) and Phase 17.2–17.3 planned.
 
 Full feature set working end-to-end:
 - Ticket Analyser (DB-first, Refresh, Force re-run analysis)
 - BU/PS Tickets table (sync, filter, sort, admin delete)
 - BU/PS Ticket detail page (shared components, Refresh, AI analysis)
-- Unified DB schema (`tickets`, `ticket_posts`, `ticket_analyses`, `model_pricing`, `analysis_runs`)
+- **Markdown Export** — "⬇ Download .md" on both Ticket Analyser and BU/PS detail page; programmatic build + Claude Overview; cached in `ticket_exports`; stale-aware (auto re-runs analysis if fetch date > analysis date)
+- Unified DB schema (`tickets`, `ticket_posts`, `ticket_analyses`, `ticket_exports`, `model_pricing`, `analysis_runs`)
 - Token tracking (`inputTokens` / `outputTokens`) + USD cost calculation from `model_pricing`
-- Analysis run history (`analysis_runs`) — append-only, orphan-safe, with cost columns in UI
+- **API Usage History** (`analysis_runs`) — append-only, orphan-safe, with cost columns in UI; `runType` distinguishes analysis vs download; shown in both Ticket Analyser and BU/PS pages
 
 App is live at **https://jigtree-operations.vercel.app** (GitHub: `goyal-sahil/jigtree-operations`).
 
@@ -1318,12 +1319,21 @@ Cache key: `(user_id, ticket_id, kayako_url)`. Cache is NOT auto-invalidated whe
 - [x] **`AnalysisHistory` component**: collapsible table with 11 columns + cost tfoot; orphaned run labels
 - [x] **`TimezoneProvider` + `lib/tz.ts`**: browser timezone propagated via context; used for date formatting across all components
 
+## Post-launch bug fixes (applied after v1.0.0)
+
+- [x] **Bug: Cached AI analysis not auto-loading in Ticket Analyser** — `/api/ticket` now performs a `ticketAnalysis.findUnique` lookup (for both DB-cache hit and live fetch paths) and returns `cachedAnalysis?: AnalysisResult | null` in the response. `TicketAnalyser.doFetch()` reads this field and calls `setAnalysis(data.cachedAnalysis)` so the AI tab pre-populates on load. Types updated: `TicketResponse` in `types/kayako.ts` now includes `cachedAnalysis?`.
+- [x] **Bug: Tags missing for newly pulled tickets (Ticket Analyser)** — Root cause: `url.searchParams.set('fields', '+tags')` in `getCase()` encoded `+` as `%2B`, which Kayako did not recognise, returning no tags. Fix: `getCase()` now includes `getCaseTags(caseId)` as a 5th parallel call in `Promise.allSettled`, using the dedicated `/api/v1/cases/{caseId}/tags` endpoint that reliably returns `string[]`. The `fields=+tags` param was removed from the case GET request.
+- [x] **Architecture note: TA vs BU/PS Sync pull paths are intentionally separate** — TA and BU/PS Refresh both use `fetchAndPersistTicket` (ticketService.ts). BU/PS Sync has its own `mapTicket` / `resolveCustomFields` / `extractTeam` in `sync/route.ts` because it pre-fetches shared data once for all tickets (performance critical for 90+ ticket sync). These paths must be kept manually in sync — changes to field extraction logic in one path must be reviewed for the other.
+
+---
+
 ## Future Phases
 
 - [ ] **Automated BU/PS sync**: Vercel cron job (every N hours) to trigger sync without manual click
 - [ ] **Additional Hub tiles**: Other tooling tiles as needed
 - [ ] **Mobile responsiveness**: `sm:` Tailwind breakpoints on remaining layouts
 - [ ] **Investigate organization/requesterName missing for some tickets**: Some BU/PS tickets show "—" for Customer (organization) and empty requester name after sync — may need API debug to confirm whether `include=organization` expands correctly
+- [ ] **Supabase region migration — Japan → India (Mumbai)**: Current project is in `ap-northeast-1` (Tokyo). Move to `ap-south-1` (Mumbai) for lower latency. No built-in Supabase migration tool — process: create new project in Mumbai → `db:push` + seed pricing → pg_dump/restore data → update Google OAuth callback URL → update Vercel env vars (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `DATABASE_URL`, `DIRECT_URL`). Check Supabase support first — Pro plan customers can sometimes request assisted migrations.
 
 ---
 
@@ -1343,14 +1353,13 @@ The BU/PS Tickets page converts from a client-component-fetch model to a Next.js
 
 ### 15.1 — Database
 
-- [ ] Add `FilterPreset` model to `prisma/schema.prisma`
-  - Fields: `id`, `userId`, `module` (= `"bu-tickets"`), `name`, `queryString` (canonical), `isDefault`, `includeViewInIdentity`, `visibility` (`PRIVATE` | `SHARED`), `createdAt`, `updatedAt`
+- [x] Add `FilterPreset` model to `prisma/schema.prisma`
+  - Fields: `id`, `userId`, `module` (= `"bu-tickets"`), `name`, `filtersJson` (canonical QS), `isDefault`, `visibility` (`PERSONAL` | `SHARED`), `createdAt`, `updatedAt`
   - Relation: → `UserSettings` via `userId` + `onDelete: Cascade`
-  - Unique: `(userId, module, name)`
   - Indexes: `(userId, module, isDefault)`, `(userId, module, createdAt)`
-- [ ] Add `FilterPresetVisibility` enum to schema
-- [ ] `npm run db:push` (stop dev server first)
-- [ ] `npm run db:generate`
+- [x] Add `FilterPresetVisibility` enum to schema
+- [x] `npm run db:push` (stop dev server first)
+- [x] `npm run db:generate`
 
 ---
 
@@ -1358,34 +1367,15 @@ The BU/PS Tickets page converts from a client-component-fetch model to a Next.js
 
 **New file: `lib/bu-tickets-list-filters.ts`**
 
-- [ ] `BuTicketsSortValue` — allowlist of valid sort strings:
-  - `updated_desc` (default), `updated_asc`
-  - `created_desc`, `created_asc`
-  - `age_desc` (most days open first), `age_asc`
-  - `id_desc`, `id_asc`
-  - `title_asc`, `title_desc`
-  - `customer_asc`, `customer_desc`
-- [ ] `BuTicketsListFilters` type:
-  ```ts
-  {
-    q:             string         // text search: ID, title, customer, product, requester
-    team:          string[]       // 'PS' | 'BU'
-    status:        string[]       // 'open' | 'pending' | 'closed' | etc.
-    priority:      string[]       // 'urgent' | 'high' | 'normal'
-    blockerType:   string[]       // 'Action:*' | 'Waiting: Engineering' | etc.
-    ageRisk:       string[]       // 'AT RISK' | 'WATCH' | 'OK'
-    product:       string[]       // free-form values from DB
-    escalatedOnly: boolean
-    sort:          BuTicketsSortValue
-    page:          number
-    pageSize:      25 | 50 | 100
-  }
-  ```
-- [ ] `parseBuTicketsSearchParams(raw)` — parse + validate all fields with safe defaults
-- [ ] `serializeBuTicketsParams(f)` — serialize to query string, omitting all defaults
-- [ ] `normalizeBuTicketsPresetQS(qs)` — canonicalize: parse → page=1 → serialize
-- [ ] `buTicketsFilterSignature(f)` — canonical string used to detect active preset
-- [ ] `urlSearchParamsToRecord(sp)` — shared helper (same pattern as template)
+- [x] `SortField` + `SortDir` as separate types (`sortField: SortField`, `sortDir: SortDir`)
+- [x] `BuTicketsListFilters` type (search, team, status, priority, blockerType, ageRisk, product, isEscalated, sortField, sortDir, page, pageSize)
+- [x] `parseBuTicketsSearchParams(raw)` — parse + validate all fields with safe defaults
+- [x] `serializeBuTicketsParams(f)` — serialize to query string, omitting all defaults
+- [x] `buTicketsFilterSignature(f)` — canonical QS with page stripped to 1
+- [x] `buTicketsSortHref(params, field)` — toggle sort direction / reset to asc for new column
+- [x] `buTicketsPageHref(params, page)` — build pagination URL
+- [x] `countActiveFilters(f)` — number of active filter dimensions
+- [x] `urlSearchParamsToRecord(sp)` — shared helper
 
 ---
 
@@ -1393,29 +1383,11 @@ The BU/PS Tickets page converts from a client-component-fetch model to a Next.js
 
 **New file: `lib/bu-tickets-list-query.ts`**
 
-- [ ] `buildBuTicketsWhere(f, userId, kayakoUrl)` — Prisma `WhereInput` from all filter dimensions:
-  | Filter | Prisma condition |
-  |---|---|
-  | `q` | `title`, `organization`, `kayakoTicketId`, `product`, `requesterName` — `contains` INSENSITIVE |
-  | `team` | `team: { in: f.team }` |
-  | `status` | `status: { in: f.status, mode: 'insensitive' }` |
-  | `priority` | `priority: { in: f.priority, mode: 'insensitive' }` |
-  | `blockerType` | `analyses: { some: { userId, blockerType: { in: f.blockerType } } }` |
-  | `ageRisk` | `kayakoCreatedAt` date range (AT RISK ≥30d / WATCH ≥20d <30d / OK <20d) — OR over selected values |
-  | `product` | `product: { in: f.product }` |
-  | `escalatedOnly` | `isEscalated: true` |
-  | always | `isBuPs: true`, `kayakoUrl: kayakoUrl` |
-
-- [ ] `orderByBuTickets(sort)` — validated Prisma `orderBy` array (DB fields only; tie-breaker `id ASC`)
-  - Note: `blockerType` sort is not supported server-side (in joined table); omit from sort options
-- [ ] `fetchBuTicketsPage(prisma, f, userId, kayakoUrl)` → `{ tickets: TicketRow[], total: number, effectivePage: number }`
-  - COUNT query for total
-  - Paginated `findMany` with WHERE + orderBy + skip/take
-  - Include `analyses: { where: { userId }, select: { blockerType, oneLiner, updatedAt } }` for table columns
-  - Map to `TicketRow` via `dbTicketToRow` with analysis extras
-- [ ] `fetchBuTicketsFilterOptions(prisma, kayakoUrl)` → distinct values for dynamic dropdowns:
-  - `products: string[]` — distinct non-null product values
-  - `statuses: string[]` — distinct non-null status values
+- [x] `buildBuTicketsWhere(f, userId, kayakoUrl)` — Prisma `WhereInput` using `AND: []` pattern; all 8 filter dimensions
+- [x] `orderByBuTickets(f)` — Prisma `orderBy` from `sortField`/`sortDir`
+- [x] `fetchBuTicketsPage(f, userId, kayakoUrl)` → `BuTicketsPage` (paginated + total + unfilteredTotal)
+- [x] `fetchAllBuTickets(f, userId, kayakoUrl)` → `TicketRow[]` (all filtered rows, no skip/take — for CSV export)
+- [x] `fetchBuTicketsFilterOptions(userId, kayakoUrl)` → distinct values for checkbox groups
 
 ---
 
@@ -1423,12 +1395,13 @@ The BU/PS Tickets page converts from a client-component-fetch model to a Next.js
 
 **New file: `app/actions/bu-ticket-filter-presets.actions.ts`**
 
-- [ ] `createBuTicketFilterPreset(input)` — validate with zod, canonicalize QS, insert; optionally set as default (in transaction); `revalidatePath('/bu-tickets')`
-- [ ] `renameBuTicketFilterPreset(id, userId, name)` — update name; guard userId ownership
-- [ ] `deleteBuTicketFilterPreset(id, userId)` — delete; guard userId ownership
-- [ ] `setDefaultBuTicketFilterPreset(id, userId)` — transaction: clear all module defaults → set this one
-- [ ] `clearDefaultBuTicketFilterPreset(userId)` — transaction: clear all module defaults
-- All actions revalidate `/bu-tickets`
+- [x] `fetchPresetsForUser(userId)` — own + all SHARED presets, default-first
+- [x] `createBuTicketFilterPreset(name, filtersJson, visibility)` — inserts; revalidates `/bu-tickets`
+- [x] `deleteBuTicketFilterPreset(id)` — ownership guard + delete
+- [x] `setDefaultBuTicketFilterPreset(id)` — `$transaction`: clears others, sets this one
+- [x] `clearDefaultBuTicketFilterPreset()` — clears all own defaults
+- [x] `updateBuTicketFilterPresetFilters(id, filtersJson)` — overwrites saved filters ("Update" button)
+- [x] `toggleBuTicketFilterPresetVisibility(id)` — flips `PERSONAL ↔ SHARED`
 
 ---
 
@@ -1436,100 +1409,71 @@ The BU/PS Tickets page converts from a client-component-fetch model to a Next.js
 
 **Rewrite: `app/(dashboard)/bu-tickets/page.tsx`**
 
-- [ ] Convert to `async` Server Component — accepts `{ searchParams }` prop
-- [ ] Parse filters: `parseBuTicketsSearchParams(await searchParams)`
-- [ ] Auth + load `kayakoUrl` from `prisma.userSettings`
-- [ ] Fetch in parallel:
-  - `fetchBuTicketsPage(...)` — tickets for current filter/page
-  - `prisma.filterPreset.findMany(...)` — user's own presets + all SHARED presets
-  - `fetchBuTicketsFilterOptions(...)` — distinct product + status values for dropdowns
-  - `prisma.userSettings.findUnique(...)` — for `isAdmin` check
-- [ ] Render layout:
-  ```
-  <BUTicketsToolbar />          ← Client Component (sync, delete, last-synced)
-  <BUTicketsFilters />           ← Client Component (GET form)
-  <BUTicketsFilterPresetsToolbar /> ← Client Component (save/load presets)
-  <BUTicketsTable />             ← Client Component (display + pagination links)
-  ```
-- [ ] Remove `fetchTickets()` client-side fetch — data now comes from server
+- [x] Convert to `async` Server Component — accepts `{ searchParams }` prop
+- [x] Parse filters via `parseBuTicketsSearchParams(searchParams)`
+- [x] Auth + load `kayakoUrl` from `prisma.userSettings`
+- [x] `Promise.all` parallel fetch: page + filter options + presets + lastSyncedAt
+- [x] Default preset redirect (when `searchParams` is empty and user has a default)
+- [x] Render: `BUTicketsToolbar` + `BUTicketsFilters` + `BUTicketsTable`
+- [x] Remove `fetchTickets()` client-side fetch — data now comes from server
 
 ---
 
 ### 15.6 — New UI Components
 
 **New: `components/BUTicketsFilters.tsx`**
-- [ ] `'use client'` — collapsible panel (closed by default)
-- [ ] Header shows active filter count badge when filters are set
-- [ ] `<form method="GET">` — submits to current path, no JS required for basic use
-- [ ] Hidden `<input name="page" value="1" />` — resets to page 1 on filter change
-- [ ] Controls:
-  - Text search input (`name="q"`)
-  - Team checkboxes: PS, BU
-  - Status checkboxes: dynamic from `statusOptions` prop
-  - Priority checkboxes: Urgent, High, Normal
-  - Blocker type checkboxes: Action, Waiting: Engineering, Waiting: Customer, Waiting: 3rd Party, Ready to Close, None
-  - Age Risk checkboxes: AT RISK, WATCH, OK
-  - Product checkboxes: dynamic from `productOptions` prop
-  - Escalated only toggle
-  - Sort select: all `BU_TICKETS_SORT_OPTIONS`
-  - Page size: 25 / 50 / 100
-- [ ] Apply button (submit) + Clear filters link (href to bare `/bu-tickets`)
-- [ ] Active filter pills shown above table (each pill links to URL minus that filter)
-
-**New: `components/BUTicketsFilterPresetsToolbar.tsx`**
-- [ ] `'use client'` — uses `useTransition` + `useRouter`
-- [ ] Preset dropdown (own presets + shared presets, grouped; default marked with ★)
-- [ ] Name input + "Save" button → calls `createBuTicketFilterPreset` server action
-- [ ] "Set as default" / "Clear default" buttons for active preset
-- [ ] "Delete" button (own presets only)
-- [ ] Active preset highlight — detected via `buTicketsFilterSignature()` comparison
-- [ ] "Include view in identity" checkbox (per spec)
-- [ ] Shared preset badge on non-owned presets
+- [x] Search bar always-visible, debounced 350 ms, stale-closure-safe (uses `useSearchParams()` in timeout)
+- [x] Collapsible filter panel; auto-opens when `countActiveFilters > 0`
+- [x] `ScrollableCheckboxGroup` sub-component: `max-h-36 overflow-y-auto`, "All · None" buttons
+- [x] Draft state → Apply Filters navigates via `router.push()` (not `<form method="GET">`)
+- [x] `useEffect([paramsSig])` draft sync — no `key` remount
+- [x] NProgress: `navigate(url)` helper calls `NProgress.start()` + `router.push()`; `useEffect` calls `NProgress.done()` on URL change
+- [x] Preset pills inline (active = blue, ★ default, "Shared" badge)
+- [x] **Update preset button** — shown when draft differs from active own preset
+- [x] Preset management: ★ toggle default, eye/badge toggle visibility (PERSONAL ↔ SHARED), ✕ inline delete confirm
+- [x] `useTransition` + `loadingId` for per-item spinners
+- [x] Save preset dialog (name + visibility select)
 
 **New: `components/BUTicketsToolbar.tsx`**  *(extracted from BUTicketsTable)*
-- [ ] `'use client'` — handles sync + delete (existing logic)
-- [ ] On sync success: `router.refresh()` — triggers Server Component re-render
-- [ ] On delete success: `router.refresh()`
-- [ ] Shows last-synced relative time + sync status message
+- [x] Sync Now + Delete All (admin) + last-synced display
+- [x] `router.refresh()` after each mutation
 
 ---
 
 ### 15.7 — Refactor `BUTicketsTable`
 
-- [ ] Remove: `filter` state, `filtered` useMemo, `sorted` useMemo, `pageSize` state, page size controls
-- [ ] Remove: `sortKey` / `sortDir` state, `handleSort` (sort now via URL links)
-- [ ] Remove: inline `SpinnerIcon`, sync controls, delete controls (moved to `BUTicketsToolbar`)
-- [ ] Add: sort-link column headers — `<a href={buTicketsSortHref(currentQS, col.sortValue)}>` with ↑↓ indicator
-- [ ] Add: pagination footer — Prev / Next links + "Showing X–Y of Z" using `serializeBuTicketsParams`
-- [ ] Props change: `tickets: TicketRow[]`, `totalCount: number`, `currentPage: number`, `pageSize: number`, `currentQueryString: string`, `isAdmin: boolean`, `onDelete: (ids) => Promise<void>`
-- [ ] Keep: row rendering, admin checkboxes, delete selection, all existing cell renderers
+- [x] URL sort headers (`<Link href={buTicketsSortHref(searchParams, field)}>`) — no click handlers
+- [x] Pagination footer (`<Link>` prev/next/numbers/page-size selector)
+- [x] **Column visibility dropdown**: all visible by default, `id` always-visible, click-outside close, "Reset to defaults"
+- [x] **CSV export**: async fetch from `GET /api/bu-tickets/export?${searchParams}` (ALL filtered rows); BOM prefix; respects `visibleCols`
+- [x] Admin delete selected (checkbox + DELETE /api/bu-tickets + `router.refresh()`)
+- [x] Sync + delete controls moved to `BUTicketsToolbar`
 
 ---
 
 ### 15.8 — Shared Presets
 
-- [ ] `GET /api/bu-tickets` still works for any client-side needs (keep existing route)
-- [ ] Shared presets fetched on page load alongside own presets:
-  ```ts
-  prisma.filterPreset.findMany({
-    where: {
-      module: 'bu-tickets',
-      OR: [{ userId: user.id }, { visibility: 'SHARED' }]
-    }
-  })
-  ```
-- [ ] Preset toolbar groups: "My Presets" vs "Shared Presets"
-- [ ] Non-owners see shared presets as read-only (no delete/rename)
+- [x] Shared presets fetched via `fetchPresetsForUser(userId)` — own + SHARED, default-first
+- [x] Preset pills distinguish: ★ own default, "Shared" badge for others' SHARED presets
+- [x] Non-owners see shared presets as read-only (no delete/manage)
+- [x] Owner can toggle visibility via eye/badge button (PERSONAL ↔ SHARED)
 
----
+### 15.9 — Extras added beyond original spec
 
-### 15.9 — Cleanup & Deploy
+- [x] **NProgress** (`nextjs-toploader` + manual `NProgress.start/done`) — loading bar on all filter/sort/page/preset navigation
+- [x] **Update preset button** — appears when current draft differs from active own preset's saved filters
+- [x] **`GET /api/bu-tickets/export`** — new API route; calls `fetchAllBuTickets` to return all filtered rows for CSV download
+- [x] **Admin section** (Phase 17.1): `/admin` page, `AdminPresetsTable`, `admin.actions.ts`
+- [x] RLS policies for `filter_presets` applied in Supabase
+- [x] 53 unit tests (37 filter layer + 16 query builder)
 
-- [ ] Update `CLAUDE.md` — new files, architecture change for BU/PS page
-- [ ] Update `docs/components.md` — new + refactored components
-- [ ] Update `docs/api-routes.md` — remove GET /api/bu-tickets dependency from page render
-- [ ] `npm run build` — verify no TypeScript errors
-- [ ] Deploy to Vercel (`git push origin main`)
+### 15.10 — Cleanup & Deploy
+
+- [x] Update `CLAUDE.md` — new files, architecture change for BU/PS page
+- [x] Update `docs/filter-model.md` — full pattern reference + replication guide
+- [x] Update `Spec/Filter-Sorting/` templates — finalized pattern
+- [x] `npm run build` — verify no TypeScript errors
+- [x] Deploy to Vercel (`git push origin main`)
 
 ---
 
@@ -1540,9 +1484,289 @@ The BU/PS Tickets page converts from a client-component-fetch model to a Next.js
 | NEW | `lib/bu-tickets-list-filters.ts` |
 | NEW | `lib/bu-tickets-list-query.ts` |
 | NEW | `app/actions/bu-ticket-filter-presets.actions.ts` |
+| NEW | `app/api/bu-tickets/export/route.ts` |
 | NEW | `components/BUTicketsFilters.tsx` |
-| NEW | `components/BUTicketsFilterPresetsToolbar.tsx` |
 | NEW | `components/BUTicketsToolbar.tsx` |
+| NEW | `app/(dashboard)/admin/page.tsx` |
+| NEW | `components/AdminPresetsTable.tsx` |
+| NEW | `app/actions/admin.actions.ts` |
+| NEW | `docs/filter-model.md` |
+| NEW | `.claude/commands/filter-model.md` |
 | REWRITE | `app/(dashboard)/bu-tickets/page.tsx` |
-| REFACTOR | `components/BUTicketsTable.tsx` |
+| REFACTOR | `components/BUTicketsTable.tsx` (URL sort, pagination, column visibility, CSV export) |
+| REFACTOR | `components/BUTicketsFilters.tsx` (preset management merged in; NProgress; update preset) |
 | CHANGE | `prisma/schema.prisma` |
+| REWRITE | `Spec/Filter-Sorting/` (all templates updated to finalized pattern) |
+
+---
+
+## Phase 16 — Notion Portfolio Integration
+
+**Source**: Notion database at `trilogy-enterprises` workspace (view ID: `28485e927d3181c89d6cdd6fd57ea07d`)
+**Goal**: Ingest portfolio company data from Notion into the app, match companies to Kayako customers, and surface ARR + portfolio context on BU/PS tickets and in AI analysis.
+
+**Decisions confirmed:**
+- Sync direction: Notion → App only (one-way)
+- Sync trigger: Manual button (automated later)
+- Matching: Fuzzy company-name match with manual review/override UI
+- Data scope: Shared across all users; edits admin-only; sensitive column flagging scoped for future
+- Hub tile: New `/portfolio` page
+
+---
+
+### Architecture Overview
+
+```
+Notion API (read-only)
+  ↓  POST /api/portfolio/sync
+notion_companies (DB table)
+  ↕  matchup UI
+  ↓  company_ticket_matches (DB table — links notionCompanyId ↔ kayako org name)
+BU/PS Tickets table   ← shows matched company ARR / tier
+BU/PS Ticket detail   ← shows portfolio panel
+AI Analysis prompt    ← injects company context if matched
+/portfolio page       ← tile, sync, match management
+```
+
+---
+
+### 16.1 — Notion API Setup & Schema Discovery
+
+**Before any code**: verify Notion connection and discover actual column schema.
+
+- [ ] Add `@notionhq/client` to `package.json`
+- [ ] Add env vars:
+  - `NOTION_API_TOKEN` — Internal Integration token from https://www.notion.so/my-integrations
+  - `NOTION_PORTFOLIO_DB_ID` — Database ID from the URL (`28485e927d3181c89d6cdd6fd57ea07d`)
+- [ ] Add both to `.env.example` and Vercel environment variables
+- [ ] Create `lib/notion/client.ts` — `NotionClient` singleton wrapping `@notionhq/client`
+- [ ] Write a one-off discovery script or use Notion MCP to call `GET /databases/{id}` and inspect all property names + types
+- [ ] Document confirmed column schema in `docs/notion-integration.md` (name, type, whether nullable)
+
+---
+
+### 16.2 — Database Schema
+
+**New Prisma models** (add to `prisma/schema.prisma`):
+
+```prisma
+model NotionCompany {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  notionPageId    String    @unique       // Notion page ID
+  name            String                  // Company name (primary match field)
+  // --- columns discovered in 16.1 ---
+  arr             Float?                  // Annual Recurring Revenue
+  tier            String?                 // e.g. "Enterprise", "Mid-Market"
+  status          String?                 // e.g. "Active", "Churned"
+  owner           String?                 // CSM / account owner name
+  region          String?
+  product         String?
+  rawProperties   Json?                   // Full Notion properties blob (future-proof)
+  // --- sync metadata ---
+  lastSyncedAt    DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  matches CompanyTicketMatch[]
+
+  @@map("notion_companies")
+}
+
+model CompanyTicketMatch {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  notionCompanyId   String   @db.Uuid
+  kayakoOrgName     String   // org name as it appears in Kayako tickets
+  matchedBy         String   // 'auto' | 'manual'
+  confidence        Float?   // 0–1 for auto matches; null for manual
+  confirmedAt       DateTime?
+  confirmedBy       String?  // userId of admin who confirmed
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company NotionCompany @relation(fields: [notionCompanyId], references: [id], onDelete: Cascade)
+
+  @@unique([notionCompanyId, kayakoOrgName])
+  @@map("company_ticket_matches")
+}
+```
+
+- [ ] Add `NotionCompany` and `CompanyTicketMatch` models to `prisma/schema.prisma`
+- [ ] `npm run db:push` (stop dev server first)
+- [ ] `npm run db:generate`
+- [ ] Add RLS policies for both tables in Supabase SQL editor:
+  - `notion_companies`: authenticated users can SELECT; no direct INSERT/UPDATE (server only)
+  - `company_ticket_matches`: authenticated users can SELECT; admin-only mutations enforced at API level
+
+---
+
+### 16.3 — Notion Sync Service
+
+**New file: `lib/notion/portfolioSync.ts`**
+
+- [ ] `fetchNotionPortfolio(apiToken, dbId)` — paginate through all Notion database pages (`100` per page), return raw page objects
+- [ ] `mapNotionPageToCompany(page)` — extract typed fields from Notion property blobs into `NotionCompany` shape (title, number, select, rich_text, etc.)
+- [ ] `syncPortfolioToDB(pages)` — upsert all companies into `notion_companies` on `notionPageId`; update `lastSyncedAt`
+- [ ] Returns `{ synced: number, failed: number, duration: number }`
+
+---
+
+### 16.4 — API Routes
+
+- [ ] **`POST /api/portfolio/sync`** — auth required, admin only (`ADMIN_EMAILS`)
+  - Decrypt or read `NOTION_API_TOKEN` from env (not per-user — shared token)
+  - Call `syncPortfolioToDB()`
+  - Returns `{ ok, synced, failed, duration }`
+
+- [ ] **`GET /api/portfolio/companies`** — auth required
+  - Return all `notion_companies` with their confirmed `company_ticket_matches`
+  - Supports `?q=` text search on name
+
+- [ ] **`GET /api/portfolio/match-candidates`** — auth required
+  - Returns distinct `organization` values from `tickets` table (Kayako org names)
+  - Joined with existing matches so the UI knows what's already linked
+
+- [ ] **`POST /api/portfolio/matches`** — auth required, admin only
+  - Body: `{ notionCompanyId, kayakoOrgName, matchedBy: 'manual' }`
+  - Upsert into `company_ticket_matches`
+
+- [ ] **`DELETE /api/portfolio/matches/[id]`** — auth required, admin only
+  - Delete a match by ID
+
+---
+
+### 16.5 — Auto-Match Logic
+
+**New file: `lib/notion/autoMatch.ts`**
+
+- [ ] `scoreName(a, b): number` — normalise (lowercase, strip Ltd/Inc/Corp/LLC), then:
+  - Exact match → 1.0
+  - One contains the other → 0.85
+  - Jaro-Winkler similarity (or simple token overlap) → 0.0–0.84
+- [ ] `autoMatchCompanies(companies, kayakoOrgs)` — cross-match all pairs; return those above threshold (0.75) sorted by score; flag exact matches as `confidence = 1.0`
+- [ ] Auto-match runs as part of `POST /api/portfolio/sync` — inserts high-confidence candidates into `company_ticket_matches` with `matchedBy: 'auto'`; does NOT overwrite existing confirmed manual matches
+
+---
+
+### 16.6 — Portfolio Page (`/portfolio`)
+
+**New page**: `app/(dashboard)/portfolio/page.tsx`
+
+Add Hub tile linking to `/portfolio`.
+
+**Layout:**
+```
+[ Portfolio ] tile in Hub
+  ↓
+/portfolio
+  ├── Toolbar: "Sync from Notion" button + last synced timestamp + match stats badge
+  ├── Match Review Panel (collapsible)
+  │     ├── Unmatched Kayako orgs (need a match)
+  │     ├── Auto-match candidates (confirm / reject)
+  │     └── Confirmed matches (view / unlink)
+  └── Portfolio Table
+        Columns: Company, ARR, Tier, Status, Owner, Region, Product, Matched Kayako Org, # Tickets
+```
+
+**Components to create:**
+- [ ] `components/PortfolioTable.tsx` — sortable table of `NotionCompany[]`; admin edit/unlink controls
+- [ ] `components/PortfolioMatchPanel.tsx` — three-section match review; confirm/reject auto-matches; manual search + link
+- [ ] `components/PortfolioToolbar.tsx` — Sync button with elapsed timer (mirrors `BUTicketsToolbar` pattern)
+
+---
+
+### 16.7 — Surface Portfolio Data on BU/PS Tickets
+
+Once matches exist, show company context wherever a Kayako ticket's `organization` has a confirmed match.
+
+- [ ] **BU/PS Tickets table** — add "ARR" and "Tier" columns (from matched `NotionCompany`); join in `GET /api/bu-tickets` query
+- [ ] **BU/PS Ticket detail page** — add a `PortfolioPanel` component below `TicketCard` showing full matched company card (ARR, tier, status, owner, region)
+- [ ] **AI Analysis prompt injection** — in `lib/anthropic/client.ts`, if the ticket has a matched company, prepend a company context block to the system prompt:
+  ```
+  Customer context: [Company Name] — ARR: $X, Tier: Y, Status: Z, Owner: A
+  ```
+  This helps Claude calibrate urgency and recommendations.
+
+**New component:**
+- [ ] `components/PortfolioPanel.tsx` — compact card showing matched company data; shown on BU/PS ticket detail; "No match" state with link to `/portfolio` matchup view
+
+---
+
+### 16.8 — Sensitive Column Scaffolding (future-proof, no UI yet)
+
+- [ ] Add `sensitiveColumns String[]` field to `NotionCompany` (default `[]`) — stores column names marked sensitive
+- [ ] No UI — just the DB field so it's easy to add later without a migration
+- [ ] API routes already filter: if a column name is in `sensitiveColumns`, omit it from non-admin responses (implement the filter even though nothing is marked sensitive yet)
+
+---
+
+### 16.9 — Cleanup + Deploy
+
+- [ ] Add `NOTION_API_TOKEN` and `NOTION_PORTFOLIO_DB_ID` to Vercel environment variables
+- [ ] Run `prisma/seed-rls-portfolio.sql` in Supabase SQL editor (RLS for new tables)
+- [ ] Update `CLAUDE.md` — new models, new routes, new components
+- [ ] Update `docs/` — add `docs/notion-integration.md`; update `docs/overview.md`, `docs/api-routes.md`, `docs/components.md`, `docs/database.md`
+- [ ] `npm run build` — verify no TypeScript errors
+- [ ] Bump `package.json` to `1.2.0`, update `CHANGELOG.md`
+- [ ] `git push origin main`
+
+---
+
+### File Map for Phase 16
+
+| New / Changed | Path |
+|---|---|
+| NEW | `lib/notion/client.ts` |
+| NEW | `lib/notion/portfolioSync.ts` |
+| NEW | `lib/notion/autoMatch.ts` |
+| NEW | `app/(dashboard)/portfolio/page.tsx` |
+| NEW | `app/api/portfolio/sync/route.ts` |
+| NEW | `app/api/portfolio/companies/route.ts` |
+| NEW | `app/api/portfolio/match-candidates/route.ts` |
+| NEW | `app/api/portfolio/matches/route.ts` |
+| NEW | `app/api/portfolio/matches/[id]/route.ts` |
+| NEW | `components/PortfolioTable.tsx` |
+| NEW | `components/PortfolioMatchPanel.tsx` |
+| NEW | `components/PortfolioToolbar.tsx` |
+| NEW | `components/PortfolioPanel.tsx` |
+| NEW | `docs/notion-integration.md` |
+| NEW | `prisma/seed-rls-portfolio.sql` |
+| CHANGE | `prisma/schema.prisma` |
+| CHANGE | `components/HubPage.tsx` |
+| CHANGE | `components/BUTicketsTable.tsx` |
+| CHANGE | `app/(dashboard)/bu-tickets/[id]/page.tsx` |
+| CHANGE | `lib/anthropic/client.ts` |
+| CHANGE | `app/api/bu-tickets/route.ts` |
+
+---
+
+### Env Vars Added in Phase 16
+
+| Variable | Description |
+|---|---|
+| `NOTION_API_TOKEN` | Internal Integration token — from https://www.notion.so/my-integrations |
+| `NOTION_PORTFOLIO_DB_ID` | Notion database ID — `28485e927d3181c89d6cdd6fd57ea07d` |
+
+Both are server-only (no `NEXT_PUBLIC_` prefix). The Notion token is a shared app credential, not per-user.
+
+---
+
+## Phase 17 — Admin Section
+
+**Goal**: A dedicated `/admin` area (admin-gated by `ADMIN_EMAILS`) for cross-user management tasks. Scaffolded in Phase 15 UI work.
+
+### Phase 17.1 — Filter Preset Management ✅ (complete)
+- `app/(dashboard)/admin/page.tsx` — Server Component, admin-gated redirect
+- `components/AdminPresetsTable.tsx` — all presets grouped by user, with delete
+- `app/actions/admin.actions.ts` — `adminDeleteFilterPreset`
+- Sidebar shows "Admin" nav item to admin users only
+- Hub page shows "Administration" tile section for admins
+
+### Phase 17.2 — User Management (planned)
+- List all users who have saved settings (from `user_settings`)
+- Show last-seen date, credential status (has Kayako / has Anthropic key)
+- Admin can revoke / impersonate (future)
+
+### Phase 17.3 — Model Pricing Management (planned)
+- CRUD UI for `model_pricing` table (currently managed via raw SQL seed)
+- Add new pricing rows when Anthropic changes rates
+- View current effective pricing per model

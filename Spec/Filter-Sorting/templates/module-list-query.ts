@@ -1,76 +1,160 @@
 import 'server-only'
 
-import type { PrismaClient } from '@/app/generated/prisma/client'
-import { Prisma } from '@/app/generated/prisma/client'
-import type { ModuleListFilters, ModuleSortValue } from './module-list-filters'
+/**
+ * Server-only Prisma query helpers for the Module list page.
+ * Replace `moduleItem` with your actual Prisma model name (e.g. `ticket`, `order`).
+ * Replace `ModuleItem` with your TypeScript type for a row (e.g. `TicketRow`, `OrderRow`).
+ */
 
-function orderByClause(sort: ModuleSortValue): Prisma.Sql {
-  switch (sort) {
-    case 'created_asc':
-      return Prisma.sql`t."created_at" ASC`
-    case 'name_asc':
-      return Prisma.sql`t."name" ASC NULLS LAST`
-    case 'name_desc':
-      return Prisma.sql`t."name" DESC NULLS LAST`
-    case 'created_desc':
-    default:
-      return Prisma.sql`t."created_at" DESC`
+import { prisma } from '@/lib/prisma'
+import { Prisma } from '@prisma/client'
+import type { ModuleListFilters } from './module-list-filters'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+/** Distinct values for each checkbox group in the filter panel */
+export interface FilterOptions {
+  statuses:   string[]
+  priorities: string[]
+  // TODO: add your filter dimensions
+}
+
+export interface ModulePage {
+  rows:             any[]   // TODO: replace with your typed row shape
+  total:            number  // filtered row count (drives pagination display)
+  unfilteredTotal:  number  // all rows for this user (drives "Delete All N?" dialog)
+}
+
+// ---------------------------------------------------------------------------
+// WHERE builder
+// ---------------------------------------------------------------------------
+
+export function buildModuleWhere(
+  filters: ModuleListFilters,
+  userId:  string,
+  // TODO: add other scope params (e.g. kayakoUrl, workspaceId) as needed
+): Prisma.ModuleItemWhereInput {  // TODO: replace with correct Prisma type
+  const AND: Prisma.ModuleItemWhereInput[] = [
+    // Base scope — always filter to this user's data
+    // TODO: replace with your tenant/scope condition, e.g. { userId } or { workspaceId }
+    { userId },
+  ]
+
+  // Full-text / ID search
+  if (filters.search) {
+    const q      = filters.search.trim()
+    const numId  = parseInt(q, 10)
+    const orClauses: Prisma.ModuleItemWhereInput[] = [
+      { name:  { contains: q, mode: 'insensitive' } },
+      // TODO: add other searchable fields
+    ]
+    if (!isNaN(numId)) orClauses.push({ numericId: numId }) // TODO: adjust field name
+    AND.push({ OR: orClauses })
+  }
+
+  // Multi-select arrays
+  if (filters.status?.length)   AND.push({ status:   { in: filters.status } })
+  if (filters.priority?.length) AND.push({ priority: { in: filters.priority } })
+  // TODO: add your dimensions
+
+  // Boolean flags
+  if (filters.isFlag) AND.push({ isFlag: true })
+
+  return { AND }
+}
+
+// ---------------------------------------------------------------------------
+// ORDER BY builder
+// ---------------------------------------------------------------------------
+
+export function orderByModule(
+  filters: ModuleListFilters,
+): Prisma.ModuleItemOrderByWithRelationInput {  // TODO: replace with correct Prisma type
+  return { [filters.sortField]: filters.sortDir }
+}
+
+// ---------------------------------------------------------------------------
+// Paginated fetch
+// ---------------------------------------------------------------------------
+
+export async function fetchModulePage(
+  filters: ModuleListFilters,
+  userId:  string,
+): Promise<ModulePage> {
+  const where   = buildModuleWhere(filters, userId)
+  const orderBy = orderByModule(filters)
+  const skip    = (filters.page - 1) * filters.pageSize
+  const take    = filters.pageSize
+
+  const [rows, total, unfilteredTotal] = await Promise.all([
+    prisma.moduleItem.findMany({   // TODO: replace model name
+      where,
+      orderBy,
+      skip,
+      take,
+      // include related data as needed
+    }),
+    prisma.moduleItem.count({ where }),
+    prisma.moduleItem.count({ where: { userId } }),  // TODO: scope to your tenant
+  ])
+
+  return {
+    rows: rows.map(r => r),  // TODO: map DB rows to your row type
+    total,
+    unfilteredTotal,
   }
 }
 
-function buildWhereParts(f: ModuleListFilters): Prisma.Sql[] {
-  const parts: Prisma.Sql[] = [Prisma.sql`TRUE`]
+// ---------------------------------------------------------------------------
+// Fetch ALL matching rows — used by the CSV export endpoint (no skip/take)
+// ---------------------------------------------------------------------------
 
-  if (f.q) {
-    const pattern = `%${f.q}%`
-    parts.push(Prisma.sql`(t."name" ILIKE ${pattern} OR t."code" ILIKE ${pattern})`)
-  }
+export async function fetchAllModuleRows(
+  filters: ModuleListFilters,
+  userId:  string,
+): Promise<any[]> {  // TODO: replace with your typed row shape
+  const where   = buildModuleWhere(filters, userId)
+  const orderBy = orderByModule(filters)
 
-  if (f.tagIds.length > 0) {
-    const tagSql = f.tagIds.map((id) => Prisma.sql`${id}`)
-    parts.push(Prisma.sql`t."tag_id" IN (${Prisma.join(tagSql)})`)
-  }
+  const rows = await prisma.moduleItem.findMany({  // TODO: replace model name
+    where,
+    orderBy,
+    // include related data as needed
+  })
 
-  if (f.status === 'active') {
-    parts.push(Prisma.sql`t."archived_at" IS NULL`)
-  } else if (f.status === 'archived') {
-    parts.push(Prisma.sql`t."archived_at" IS NOT NULL`)
-  }
-
-  return parts
+  return rows.map(r => r)  // TODO: map DB rows to your row type
 }
 
-export type ModuleIdPageResult = {
-  ids: string[]
-  total: number
-  effectivePage: number
-}
+// ---------------------------------------------------------------------------
+// Filter options — distinct values for each checkbox group
+// ---------------------------------------------------------------------------
 
-export async function fetchModuleIdsPage(
-  prisma: PrismaClient,
-  f: ModuleListFilters
-): Promise<ModuleIdPageResult> {
-  const whereParts = buildWhereParts(f)
-  const whereSql = Prisma.join(whereParts, ' AND ')
-  const orderSql = orderByClause(f.sort)
+export async function fetchModuleFilterOptions(
+  userId: string,
+): Promise<FilterOptions> {
+  const base = { userId } satisfies Prisma.ModuleItemWhereInput  // TODO: adjust scope
 
-  const countRows = await prisma.$queryRaw<{ n: bigint }[]>`
-    SELECT COUNT(*)::bigint AS n
-    FROM "your_table" t
-    WHERE ${whereSql}
-  `
-  const total = Number(countRows[0]?.n ?? 0)
-  const totalPages = Math.max(1, Math.ceil(total / f.pageSize))
-  const effectivePage = Math.min(Math.max(1, f.page), totalPages)
-  const skip = (effectivePage - 1) * f.pageSize
+  const [statusRows, priorityRows] = await Promise.all([
+    prisma.moduleItem.findMany({
+      where:   { ...base, status: { not: null } },
+      select:  { status: true },
+      distinct: ['status'],
+      orderBy:  { status: 'asc' },
+    }),
+    prisma.moduleItem.findMany({
+      where:   { ...base, priority: { not: null } },
+      select:  { priority: true },
+      distinct: ['priority'],
+      orderBy:  { priority: 'asc' },
+    }),
+    // TODO: add your dimensions
+  ])
 
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT t."id"
-    FROM "your_table" t
-    WHERE ${whereSql}
-    ORDER BY ${orderSql}, t."id" ASC
-    LIMIT ${f.pageSize} OFFSET ${skip}
-  `
-
-  return { ids: rows.map((r) => r.id), total, effectivePage }
+  return {
+    statuses:   statusRows.map(r => r.status!),
+    priorities: priorityRows.map(r => r.priority!),
+    // TODO: add your dimensions
+  }
 }

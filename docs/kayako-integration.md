@@ -57,14 +57,15 @@ Calls `GET /api/v1/me` with Basic auth. Stores `sessionId`, `csrfToken`, and `au
 
 #### `getCase(caseId)`
 
-Runs **four requests in parallel** via `Promise.allSettled`, then resolves N more to expand custom field option labels:
+Runs **five requests in parallel** via `Promise.allSettled`, then resolves N more to expand custom field option labels:
 
 ```
 [parallel]
-  GET /api/v1/cases/{caseId}?include=user,team,organization,brand&fields=+tags
+  GET /api/v1/cases/{caseId}?include=user,team,organization,brand
   GET /api/v1/cases/statuses
   GET /api/v1/cases/priorities
   GET /api/v1/cases/fields
+  GET /api/v1/cases/{caseId}/tags   (via getCaseTags())
 
 [parallel, for each SELECT/RADIO/CASCADINGSELECT field with a numeric option ID value]
   GET /api/v1/cases/fields/{fieldId}?include=field_option,locale_field
@@ -75,7 +76,7 @@ Runs **four requests in parallel** via `Promise.allSettled`, then resolves N mor
     → resolves locale_field stub to plain translation string
 ```
 
-Tags are returned as objects when using `fields=+tags` — normalised to plain strings in `getCase`.
+**Tags**: fetched via the dedicated `/api/v1/cases/{caseId}/tags` endpoint (`getCaseTags()`), which returns a clean `string[]`. Do **not** use `fields=+tags` via `url.searchParams` — `URLSearchParams` encodes `+` as `%2B`, which Kayako does not recognise, causing tags to be silently missing from the response.
 
 **Custom fields resolution:**
 1. Non-system fields only (`is_system: false`)

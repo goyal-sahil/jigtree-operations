@@ -31,7 +31,8 @@ model UserSettings {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  analyses TicketAnalysis[]
+  analyses      TicketAnalysis[]
+  filterPresets FilterPreset[]
 
   @@map("user_settings")
 }
@@ -78,6 +79,7 @@ model Ticket {
   posts        TicketPost[]
   analyses     TicketAnalysis[]
   analysisRuns AnalysisRun[]
+  exports      TicketExport[]
 
   @@unique([kayakoTicketId, kayakoUrl])
   @@map("tickets")
@@ -160,6 +162,8 @@ model AnalysisRun {
   kayakoUrl      String
   /// 'manual' | 'batch' | 'forced'
   trigger        String
+  /// 'analysis' | 'download'
+  runType        String   @default("analysis")
   modelUsed      String?
   postCount      Int?
   inputTokens    Int?
@@ -173,4 +177,48 @@ model AnalysisRun {
   ticket Ticket? @relation(fields: [ticketId], references: [id], onDelete: SetNull)
 
   @@map("analysis_runs")
+}
+
+// ── Filter presets (BU/PS Tickets URL-driven filtering) ──────────────────
+
+enum FilterPresetVisibility {
+  PERSONAL
+  SHARED
+}
+
+model FilterPreset {
+  id          String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String                 @db.Uuid
+  name        String
+  /// Canonical serialized query string (page stripped to 1)
+  filtersJson String
+  visibility  FilterPresetVisibility @default(PERSONAL)
+  isDefault   Boolean                @default(false)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  settings UserSettings @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@map("filter_presets")
+}
+
+// Cached markdown export per user per ticket.
+model TicketExport {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketId        String   @db.Uuid
+  userId          String   @db.Uuid
+  markdownContent String?  @db.Text
+  modelUsed       String?
+  inputTokens     Int?
+  outputTokens    Int?
+  /// "pending" | "running" | "done" | "error"
+  status          String   @default("pending")
+  errorMsg        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, userId])
+  @@map("ticket_exports")
 }

@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { KayakoCase, KayakoPost, AnalysisResult, AnalysisSections } from '@/types/kayako'
+import type { KayakoCase, KayakoPost, AnalysisResult, AnalysisSections, TicketRow, UnifiedPost } from '@/types/kayako'
 import { getPostText, safeLabel } from '@/lib/utils'
 
 const COMPLEXITY_KEYWORDS = [
@@ -193,5 +193,256 @@ ${conversation}`
     input_tokens:   response.usage.input_tokens,
     output_tokens:  response.usage.output_tokens,
     status:         'done',
+  }
+}
+
+// ── Ticket Markdown Export ────────────────────────────────────────────────────
+
+export interface ExportResult {
+  markdown:      string
+  model_used:    string
+  input_tokens:  number
+  output_tokens: number
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<\/h[1-6]>/gi, '\n')
+    .replace(/<h[1-6][^>]*>/gi, '### ')
+    .replace(/<\/blockquote>/gi, '\n')
+    .replace(/<blockquote[^>]*>/gi, '> ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function postChannelLabel(channel: string | null): string {
+  switch (channel?.toUpperCase()) {
+    case 'NOTE':              return '🔒 Internal Note'
+    case 'CUSTOMER':          return '👤 Customer'
+    case 'SIDE_CONVERSATION': return '↗ Side Conversation'
+    default:                  return '💬 Support Reply'
+  }
+}
+
+function buildFullMarkdown(ticket: TicketRow, posts: UnifiedPost[], analysis: AnalysisResult | null, overview: string): string {
+  const s: string[] = []
+
+  const created  = ticket.kayakoCreatedAt?.slice(0, 10) ?? '—'
+  const exported = new Date().toISOString().slice(0, 10)
+
+  // ── Header ──────────────────────────────────────────────────────────────
+  s.push(`# Ticket #${ticket.kayakoTicketId} — ${ticket.title}`)
+  s.push('')
+  s.push(`> **Exported:** ${exported} | **Posts:** ${posts.length} | **Status:** ${ticket.status ?? '—'} | **Priority:** ${ticket.priority ?? '—'} | **Created:** ${created}`)
+  s.push('')
+
+  // ── Overview (Claude-generated) ──────────────────────────────────────────
+  if (overview.trim()) {
+    s.push('## Overview')
+    s.push('')
+    s.push(overview.trim())
+    s.push('')
+  }
+
+  s.push('---')
+  s.push('')
+
+  // ── Metadata ─────────────────────────────────────────────────────────────
+  s.push('## Metadata')
+  s.push('')
+  s.push('| Field | Value |')
+  s.push('|---|---|')
+  s.push(`| Status | ${ticket.status ?? '—'} |`)
+  s.push(`| Priority | ${ticket.priority ?? '—'} |`)
+  s.push(`| Team | ${ticket.team ?? '—'} |`)
+  s.push(`| Brand / BU | ${ticket.brand ?? '—'} |`)
+  s.push(`| Product | ${ticket.product ?? '—'} |`)
+  s.push(`| Requester | ${ticket.requesterName ?? '—'}${ticket.requesterEmail ? ` <${ticket.requesterEmail}>` : ''} |`)
+  s.push(`| Organization | ${ticket.organization ?? '—'} |`)
+  s.push(`| Assignee | ${ticket.assignee ?? '—'} |`)
+  s.push(`| Escalated | ${ticket.isEscalated ? '⚠️ Yes' : 'No'} |`)
+  s.push(`| Created | ${created} |`)
+  s.push(`| Updated | ${ticket.kayakoUpdatedAt?.slice(0, 10) ?? '—'} |`)
+  if (ticket.ghiId)      s.push(`| GitHub Issue | #${ticket.ghiId}${ticket.ghiStatus ? ` (${ticket.ghiStatus})` : ''} |`)
+  if (ticket.holdReason) s.push(`| Hold Reason | ${ticket.holdReason} |`)
+  s.push('')
+
+  // ── Tags ──────────────────────────────────────────────────────────────────
+  s.push('## Tags')
+  s.push('')
+  s.push(ticket.tags.length > 0 ? ticket.tags.map(t => `\`${t}\``).join(' ') : '*(none)*')
+  s.push('')
+
+  // ── Custom fields ─────────────────────────────────────────────────────────
+  if (ticket.customFields && ticket.customFields.length > 0) {
+    s.push('## Custom Fields')
+    s.push('')
+    s.push('| Field | Value |')
+    s.push('|---|---|')
+    for (const f of ticket.customFields) {
+      s.push(`| ${f.label} | ${f.value} |`)
+    }
+    s.push('')
+  }
+
+  // ── Jira references ───────────────────────────────────────────────────────
+  if (ticket.jiraFields && Object.keys(ticket.jiraFields).length > 0) {
+    s.push('## Jira References')
+    s.push('')
+    s.push('| Key | Value |')
+    s.push('|---|---|')
+    for (const [key, val] of Object.entries(ticket.jiraFields)) {
+      s.push(`| ${key} | ${val} |`)
+    }
+    s.push('')
+  }
+
+  // ── AI Analysis ───────────────────────────────────────────────────────────
+  if (analysis?.status === 'done') {
+    const sec = analysis.sections
+    s.push('## AI Analysis')
+    s.push('')
+    s.push(`*Model: ${analysis.model_used} | Posts analysed: ${analysis.post_count}*`)
+    s.push('')
+
+    if (sec.one_liner) {
+      s.push('### One-liner')
+      s.push('')
+      s.push(sec.one_liner)
+      s.push('')
+    }
+
+    if (sec.blocker_type || sec.blocker_detail) {
+      s.push('### Blocker')
+      s.push('')
+      if (sec.blocker_type)   s.push(`**Type:** ${sec.blocker_type}`)
+      if (sec.blocker_detail) s.push(`**Detail:** ${sec.blocker_detail}`)
+      s.push('')
+    }
+
+    if (sec.path_to_closure) {
+      s.push('### Path to Closure')
+      s.push('')
+      s.push(sec.path_to_closure)
+      s.push('')
+    }
+
+    if (sec.case_summary) {
+      s.push('### Case Summary')
+      s.push('')
+      s.push(sec.case_summary)
+      s.push('')
+    }
+
+    if (sec.customer_sentiment) {
+      s.push('### Customer Sentiment')
+      s.push('')
+      s.push(sec.customer_sentiment)
+      s.push('')
+    }
+
+    if (sec.what_needed) {
+      s.push("### What's Needed to Close")
+      s.push('')
+      s.push(sec.what_needed)
+      s.push('')
+    }
+
+    if (sec.next_steps) {
+      s.push('### Next Steps')
+      s.push('')
+      s.push(sec.next_steps)
+      s.push('')
+    }
+
+    if (analysis.day_summaries && Object.keys(analysis.day_summaries).length > 0) {
+      s.push('### Timeline')
+      s.push('')
+      for (const [date, summary] of Object.entries(analysis.day_summaries)) {
+        s.push(`- **${date}:** ${summary}`)
+      }
+      s.push('')
+    }
+
+    s.push('---')
+    s.push('')
+  }
+
+  // ── Conversation ──────────────────────────────────────────────────────────
+  s.push(`## Conversation (${posts.length} posts)`)
+  s.push('')
+
+  if (posts.length === 0) {
+    s.push('*(No posts available)*')
+    s.push('')
+  } else {
+    for (const p of posts) {
+      const ts   = (p.postedAt ?? '').slice(0, 16).replace('T', ' ')
+      const ch   = postChannelLabel(p.channel)
+      const auth = p.creatorName ?? 'Unknown'
+      const body = stripHtml(p.contents)
+      s.push('---')
+      s.push('')
+      s.push(`### [${ts}] ${ch} — ${auth}`)
+      s.push('')
+      s.push(body)
+      s.push('')
+    }
+  }
+
+  return s.join('\n')
+}
+
+export async function generateTicketMarkdown(
+  ticket: TicketRow,
+  posts: UnifiedPost[],
+  analysis: AnalysisResult | null,
+  apiKey: string,
+): Promise<ExportResult> {
+  const model  = 'claude-haiku-4-5-20251001'
+  const client = new Anthropic({ apiKey })
+
+  // Build a compact context for the overview (small prompt → small output)
+  const ctxLines: string[] = [
+    `Ticket: #${ticket.kayakoTicketId} — ${ticket.title}`,
+    `Status: ${ticket.status ?? '—'} | Priority: ${ticket.priority ?? '—'} | Team: ${ticket.team ?? '—'}`,
+    `Posts: ${posts.length} | Tags: ${ticket.tags.join(', ') || '—'}`,
+  ]
+  if (analysis?.status === 'done') {
+    const sec = analysis.sections
+    if (sec.one_liner)    ctxLines.push(`One-liner: ${sec.one_liner}`)
+    if (sec.blocker_type) ctxLines.push(`Blocker: ${sec.blocker_type}`)
+    if (sec.case_summary) ctxLines.push(`Summary: ${sec.case_summary.slice(0, 400)}`)
+  }
+
+  const response = await client.messages.create({
+    model,
+    max_tokens: 400,
+    messages: [{
+      role: 'user' as const,
+      content: `Write a 3–5 bullet "Overview" for this support ticket export. Each bullet is one sentence. Cover the core issue, current blocker/state, and what is needed to close. Use "- " bullets, no heading.
+
+${ctxLines.join('\n')}`,
+    }],
+  })
+
+  const overview = response.content[0].type === 'text' ? response.content[0].text : ''
+
+  return {
+    markdown:      buildFullMarkdown(ticket, posts, analysis, overview),
+    model_used:    model,
+    input_tokens:  response.usage.input_tokens,
+    output_tokens: response.usage.output_tokens,
   }
 }

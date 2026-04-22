@@ -85,15 +85,22 @@ Fetch a Kayako ticket and its posts. **DB-first**: returns cached data if availa
 **Response (success):**
 ```json
 {
-  "ticket":       { ...TicketRow },
-  "posts":        [ ...UnifiedPost[] ],
-  "fromCache":    false,
-  "lastSyncedAt": "2024-01-16T10:30:00.000Z",
-  "warning":      ""
+  "ticket":          { ...TicketRow },
+  "posts":           [ ...UnifiedPost[] ],
+  "fromCache":       false,
+  "lastSyncedAt":    "2024-01-16T10:30:00.000Z",
+  "warning":         "",
+  "cachedAnalysis":  { ...AnalysisResult },
+  "export":          { "status": "done", "createdAt": "2024-01-16T10:30:00.000Z" },
+  "analysisRuns":    [ ...AnalysisRunRow[] ]
 }
 ```
 
 `warning` is non-empty if posts were cut short (e.g. timeout, max 500 posts limit).
+
+`cachedAnalysis` is the current user's cached `TicketAnalysis` record (if `status='done'`), serialised to `AnalysisResult` shape. `TicketAnalyser` reads this field on load and auto-populates the AI tab without requiring a separate `/api/analysis` call. Both the DB-cache path and the live-fetch path include this field.
+
+`export` is `null` if no export has been generated for this user. `analysisRuns` is an array of up to 20 recent runs (both analysis and download runs) with computed cost fields. Both fields are included in both the DB-cache path and live-fetch path.
 
 **Error responses:**
 - `400` — invalid ticket input, or Kayako credentials not configured
@@ -162,6 +169,47 @@ Run AI analysis on a ticket, or return a cached result. **Reads ticket and posts
 
 ---
 
+## `POST /api/export`
+
+Generate (or return cached) a full ticket markdown export. Uses Claude Haiku to write an Overview section; all other content is assembled programmatically.
+
+`maxDuration = 120` seconds.
+
+**Request body:**
+```json
+{
+  "caseId":       12345,
+  "forceRefresh": false
+}
+```
+
+**Steps:**
+1. Auth check
+2. Look up ticket + posts from DB; fail 404 if not found or `postsStatus !== 'done'`
+3. Decrypt `anthropicKeyEnc`
+4. Load existing `TicketExport` for `(ticketId, userId)` — if found and `status='done'` and `!forceRefresh`, return cached content immediately
+5. Upsert `TicketExport` with `status='running'`
+6. Load current `TicketAnalysis` for `(ticketId, userId)`
+7. `generateTicketMarkdown(ticket, posts, analysis, apiKey)` — Claude call for Overview + programmatic full doc build
+8. Upsert `TicketExport` with `status='done'`, `markdownContent`, token counts
+9. `prisma.analysisRun.create(...)` with `runType='download'`, trigger, tokens, duration, status
+10. Return `{ markdown, fromCache: false }`
+
+**Response (success):**
+```json
+{
+  "markdown":   "# Ticket #12345 — ...\n\n...",
+  "fromCache":  false
+}
+```
+
+**Error responses:**
+- `400` — Anthropic API key not configured
+- `404` — ticket not in DB or posts not fetched yet
+- `500` — decryption failure or export generation error
+
+---
+
 ## `POST /api/note`
 
 Post an internal note to a Kayako ticket.
@@ -190,6 +238,30 @@ After a successful note post, `TicketAnalyser` reloads the ticket with `forceRef
 - `400` — empty note text, or Kayako credentials not configured
 - `500` — decryption failure
 - `502` — Kayako authentication or post failure
+
+---
+
+## `GET /api/bu-tickets/export`
+
+Return **all** filtered BU/PS tickets for CSV export. Uses the same filter parameters as the BU/PS Tickets page, but with no `skip`/`take` — returns every matching row.
+
+Called by `BUTicketsTable.exportToCsv()` which passes the current `searchParams` as query string.
+
+**Query params:** same as the BU/PS Tickets page URL (search, team, status, priority, blockerType, ageRisk, product, isEscalated, sortField, sortDir — page/pageSize ignored).
+
+**Steps:**
+1. Auth check
+2. Load `kayakoUrl` from `prisma.userSettings`
+3. `parseBuTicketsSearchParams(urlSearchParamsToRecord(req.nextUrl.searchParams))`
+4. `fetchAllBuTickets(filters, user.id, kayakoUrl)` — same WHERE/ORDER as paginated query, no LIMIT
+
+**Response:**
+```json
+{ "tickets": [ ...TicketRow[] ] }
+```
+
+**Error responses:**
+- `401` — not authenticated
 
 ---
 
@@ -309,10 +381,15 @@ Fetch a single BU/PS ticket from DB by Kayako ticket ID (not UUID), including po
     "errorMsg":     null,
     "updatedAt":    "2024-01-16T10:30:00.000Z"
   },
+  "export": {
+    "status":    "done",
+    "createdAt": "2024-01-16T10:30:00.000Z"
+  },
   "analysisRuns": [
     {
       "id":            "uuid",
       "trigger":       "manual",
+      "runType":       "analysis",
       "modelUsed":     "claude-haiku-4-5-20251001",
       "postCount":     23,
       "inputTokens":   1843,
@@ -330,7 +407,7 @@ Fetch a single BU/PS ticket from DB by Kayako ticket ID (not UUID), including po
 }
 ```
 
-`analysis` is `null` if no analysis has been run for this user. `analysisRuns` is an empty array if no runs exist. `isOrphaned: true` indicates the run survived a previous ticket deletion and was re-linked.
+`analysis` is `null` if no analysis has been run for this user. `export` is `null` if no export has been generated. `analysisRuns` is an empty array if no runs exist. `isOrphaned: true` indicates the run survived a previous ticket deletion and was re-linked. `runType` distinguishes `"analysis"` from `"download"` calls.
 
 **Error responses:**
 - `400` — invalid ticket ID

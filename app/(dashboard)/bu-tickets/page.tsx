@@ -1,116 +1,64 @@
-'use client'
-
-import { useCallback, useEffect, useRef, useState } from 'react'
-import BUTicketsTable from '@/components/BUTicketsTable'
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
+import { prisma } from '@/lib/prisma'
 import CredentialsBanner from '@/components/CredentialsBanner'
-import { createClient } from '@/lib/supabase/client'
-import type { TicketRow } from '@/types/kayako'
+import BUTicketsToolbar from '@/components/BUTicketsToolbar'
+import BUTicketsFilters from '@/components/BUTicketsFilters'
+import BUTicketsTable from '@/components/BUTicketsTable'
+import { parseBuTicketsSearchParams, buTicketsFilterSignature } from '@/lib/bu-tickets-list-filters'
+import { fetchBuTicketsPage, fetchBuTicketsFilterOptions } from '@/lib/bu-tickets-list-query'
+import { fetchPresetsForUser } from '@/app/actions/bu-ticket-filter-presets.actions'
 
-const SYNC_TIMEOUT_MS = 5 * 60 * 1000
+function isAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false
+  const admins = (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim().toLowerCase())
+  return admins.includes(email.toLowerCase())
+}
 
-export default function BuTicketsPage() {
-  const [tickets, setTickets] = useState<TicketRow[]>([])
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [syncStatus, setSyncStatus] = useState<string | null>(null)
-  const [syncElapsed, setSyncElapsed] = useState(0)
-  const [isAdmin, setIsAdmin] = useState(false)
-  const [missingKayako, setMissingKayako] = useState(false)
-  const [missingAnthropic, setMissingAnthropic] = useState(false)
-  const syncTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+// In Next.js 14 App Router, searchParams is a plain synchronous object (not a Promise).
+export default async function BuTicketsPage({
+  searchParams,
+}: {
+  searchParams: Record<string, string | string[]>
+}) {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
 
-  useEffect(() => {
-    const supabase = createClient()
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      const admins = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? '').split(',').map(e => e.trim().toLowerCase())
-      if (user?.email && admins.includes(user.email.toLowerCase())) setIsAdmin(true)
-    })
-    fetch('/api/credentials')
-      .then(r => r.json() as Promise<{ hasKayako: boolean; hasAnthropic: boolean }>)
-      .then(d => { setMissingKayako(!d.hasKayako); setMissingAnthropic(!d.hasAnthropic) })
-      .catch(() => null)
-  }, [])
+  const settings = await prisma.userSettings.findUnique({
+    where:  { userId: user.id },
+    select: { kayakoUrl: true, kayakoEmail: true, kayakoPasswordEnc: true, anthropicKeyEnc: true },
+  })
 
-  const fetchTickets = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bu-tickets')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json() as { tickets: TicketRow[]; lastSyncedAt: string | null }
-      setTickets(data.tickets)
-      setLastSyncedAt(data.lastSyncedAt)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to load tickets')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const kayakoUrl = settings?.kayakoUrl ?? ''
+  const filters   = parseBuTicketsSearchParams(searchParams)
+  const isAdmin   = isAdminEmail(user.email)
 
-  useEffect(() => { void fetchTickets() }, [fetchTickets])
+  // Redirect to default preset when landing with no filter params
+  const hasParams = Object.keys(searchParams).length > 0
 
-  async function handleSync() {
-    setSyncElapsed(0)
-    setSyncStatus('Connecting to Kayako…')
-    syncTimerRef.current = setInterval(() => setSyncElapsed(s => s + 1), 1000)
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), SYNC_TIMEOUT_MS)
-    try {
-      const res = await fetch('/api/bu-tickets/sync', { method: 'POST', signal: controller.signal })
-      clearTimeout(timeoutId)
-      if (!res.ok) {
-        const body = await res.json() as { error?: string }
-        throw new Error(body.error ?? `Sync failed: HTTP ${res.status}`)
-      }
-      const body = await res.json() as { synced: number; failed: number; total: number; duration: number; firstError?: string }
-      await fetchTickets()
+  const [pageResult, filterOptions, presets, maxSyncRow] = await Promise.all([
+    fetchBuTicketsPage(filters, user.id, kayakoUrl),
+    fetchBuTicketsFilterOptions(user.id, kayakoUrl),
+    fetchPresetsForUser(user.id),
+    prisma.ticket.aggregate({
+      where: { isBuPs: true, kayakoUrl },
+      _max:  { lastSyncedAt: true },
+    }),
+  ])
 
-      if (body.synced === 0) {
-        const detail = body.firstError ? ` — ${body.firstError}` : ''
-        setSyncStatus(`Sync completed but all ${body.total} tickets failed${detail}`)
-        return
-      }
-
-      const base = `Synced ${body.synced}/${body.total} tickets in ${(body.duration / 1000).toFixed(1)}s`
-      const suffix = body.failed > 0 ? ` (${body.failed} failed)` : ''
-      setSyncStatus(`${base}${suffix} — fetching posts & queuing analysis`)
-
-      // Only fire background jobs when tickets were actually synced
-      void fetch('/api/bu-tickets/sync-posts',    { method: 'POST' })
-      void fetch('/api/bu-tickets/analyse-batch', { method: 'POST' })
-    } catch (err: unknown) {
-      clearTimeout(timeoutId)
-      if (err instanceof Error && err.name === 'AbortError') throw new Error('Sync timed out after 5 minutes.')
-      throw err
-    } finally {
-      if (syncTimerRef.current) { clearInterval(syncTimerRef.current); syncTimerRef.current = null }
+  // Redirect to default preset if user lands with no QS
+  if (!hasParams) {
+    const defaultPreset = presets.find(p => p.isDefault && p.userId === user.id)
+    if (defaultPreset) {
+      redirect(`/bu-tickets?${defaultPreset.filtersJson}`)
     }
   }
 
-  async function handleDelete(ids: string[]) {
-    const res = await fetch('/api/bu-tickets', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
-    })
-    if (!res.ok) {
-      const body = await res.json() as { error?: string }
-      throw new Error(body.error ?? 'Delete failed')
-    }
-    await fetchTickets()
-  }
-
-  async function handleDeleteAll() {
-    const res = await fetch('/api/bu-tickets', {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ all: true }),
-    })
-    if (!res.ok) {
-      const body = await res.json() as { error?: string }
-      throw new Error(body.error ?? 'Delete failed')
-    }
-    await fetchTickets()
-  }
+  const globalLastSyncedAt = maxSyncRow._max.lastSyncedAt?.toISOString() ?? null
+  const missingKayako    = !settings?.kayakoUrl || !settings?.kayakoEmail || !settings?.kayakoPasswordEnc
+  const missingAnthropic = !settings?.anthropicKeyEnc
+  const currentQS        = buTicketsFilterSignature(filters)
 
   return (
     <div className="px-6 py-6">
@@ -121,22 +69,26 @@ export default function BuTicketsPage() {
 
       <CredentialsBanner missingKayako={missingKayako} missingAnthropic={missingAnthropic} />
 
-      {loading ? (
-        <div className="text-center py-16 text-slate-400">Loading…</div>
-      ) : error ? (
-        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">{error}</div>
-      ) : (
-        <BUTicketsTable
-          tickets={tickets}
-          lastSyncedAt={lastSyncedAt}
-          syncStatus={syncStatus}
-          syncElapsed={syncElapsed}
-          isAdmin={isAdmin}
-          onSync={handleSync}
-          onDelete={handleDelete}
-          onDeleteAll={handleDeleteAll}
-        />
-      )}
+      <BUTicketsToolbar
+        lastSyncedAt={globalLastSyncedAt}
+        isAdmin={isAdmin}
+        totalCount={pageResult.unfilteredTotal}
+      />
+
+      <BUTicketsFilters
+        filters={filters}
+        options={filterOptions}
+        currentQS={currentQS}
+        presets={presets}
+        userId={user.id}
+      />
+
+      <BUTicketsTable
+        tickets={pageResult.tickets}
+        total={pageResult.total}
+        filters={filters}
+        isAdmin={isAdmin}
+      />
     </div>
   )
 }

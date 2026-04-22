@@ -180,3 +180,89 @@ const response = await client.messages.create({
 })
 // response.usage.input_tokens / output_tokens are stored in DB
 ```
+
+---
+
+## Ticket Markdown Export
+
+`POST /api/export` generates a structured `.md` file for a ticket, cached in the `ticket_exports` table.
+
+### Approach: Programmatic with Claude Overview
+
+All ticket content is assembled in TypeScript — metadata, posts, analysis sections. Claude is called **only** for a short "Overview" section (3-5 bullet points), keeping output bounded and guaranteeing completeness regardless of ticket size.
+
+**Why not ask Claude for the full markdown?** The initial approach passed all ticket data to Claude with `max_tokens: 8000`. For large tickets (60+ posts), Claude truncated output mid-conversation, losing posts and the analysis section which appeared last. Programmatic generation guarantees all content is included.
+
+### `generateTicketMarkdown(ticket, posts, analysis, apiKey)`
+
+Exported from `lib/anthropic/client.ts`. Returns `ExportResult`:
+
+```typescript
+interface ExportResult {
+  markdown:      string
+  model_used:    string
+  input_tokens:  number
+  output_tokens: number
+}
+```
+
+**Process:**
+1. Call Claude Haiku (`claude-haiku-4-5-20251001`) with `max_tokens: 400` — prompt asks for 3-5 overview bullets summarising the ticket (what, why, current state)
+2. Call `buildFullMarkdown(ticket, posts, analysis, overview)` — assembles the full document programmatically:
+   - `# Ticket #{id} — {title}` header
+   - Overview section (Claude's bullets)
+   - Metadata table (status, priority, team, brand, org, requester, assignee, product, created, updated)
+   - Tags (if any)
+   - Custom fields (if any)
+   - Jira refs (if any)
+   - AI Analysis (all 8 sections, if analysis exists)
+   - Full Conversation — **all posts, no truncation**, each prefixed with channel label:
+     - `🔒 Internal Note — {author}` (NOTE)
+     - `👤 Customer — {author}` (CUSTOMER)
+     - `💬 Support Reply — {author}` (MAIL / other)
+     - `↗ Side Conversation — {author}` (SIDE_CONVERSATION)
+3. Return assembled markdown + token counts
+
+**HTML stripping**: `stripHtml(html)` — regex-based HTML → plain text conversion applied to all post contents before inclusion.
+
+### API Route (`POST /api/export`)
+
+Request body:
+```json
+{
+  "caseId":       12345,
+  "forceRefresh": false
+}
+```
+
+Steps:
+1. Auth check
+2. Decrypt `anthropicKeyEnc`
+3. Fetch ticket + posts from DB (`postsStatus` must be `'done'`)
+4. Load existing `TicketExport` for `(ticketId, userId)`
+5. If `status='done'` and `!forceRefresh` → return `{ markdown, fromCache: true }`
+6. Upsert `TicketExport` with `status='running'`
+7. Load current `TicketAnalysis` for `(ticketId, userId)` — passed to `generateTicketMarkdown`
+8. Call `generateTicketMarkdown()`
+9. Upsert `TicketExport` with `status='done'`, content, and token counts
+10. Create `AnalysisRun` row with `runType='download'`, trigger, tokens, duration, status
+11. Return `{ markdown, fromCache: false }`
+
+On error: upsert `TicketExport` with `status='error'`, create error `AnalysisRun` row, return 500.
+
+### UI Flow
+
+Both the Ticket Analyser and BU/PS detail page show a "⬇ Download .md" button when `postsStatus='done'`. On click:
+
+1. **Stale check**: if ticket's last fetch (`Math.max(lastSyncedAt, postsLastSyncedAt)`) is newer than `analysis.created_at`, the analysis is re-run first (`forceRefresh=true` to `/api/analysis`)
+2. `POST /api/export` — receive `markdown` string
+3. Trigger browser download: `Blob` → `URL.createObjectURL` → `<a>` click → `URL.revokeObjectURL`
+4. Filename: `ticket-{kayakoTicketId}.md`
+
+A "↻ Regenerate" text link appears next to the button when `exportInfo?.status === 'done'` — clicking it calls `downloadExport(forceRefresh=true)`.
+
+The button shows the current phase during long operations: "Refreshing analysis…" → "Generating export…".
+
+### Run Logging
+
+Every export generation (success or error) appends a row to `analysis_runs` with `runType='download'`. This appears in the `AnalysisHistory` component under the "Download" type badge (emerald). Token counts and costs are tracked the same way as analysis runs.

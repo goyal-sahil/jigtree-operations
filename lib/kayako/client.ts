@@ -154,28 +154,20 @@ export class KayakoClient {
   }
 
   async getCase(caseId: number): Promise<{ data: KayakoCase }> {
-    const [caseResp, statuses, priorities, fieldDefs] = await Promise.allSettled([
-      this.get<{ data: KayakoCase }>(`/api/v1/cases/${caseId}`, { include: 'user,team,organization,brand', fields: '+tags' }),
+    const [caseResp, statuses, priorities, fieldDefs, tagsResp] = await Promise.allSettled([
+      this.get<{ data: KayakoCase }>(`/api/v1/cases/${caseId}`, { include: 'user,team,organization,brand' }),
       this.get<{ data: Array<{ id: number; label?: string; name?: string }> }>('/api/v1/cases/statuses'),
       this.get<{ data: Array<{ id: number; label?: string; name?: string }> }>('/api/v1/cases/priorities'),
       this.get<{ data: KayakoCaseFieldDef[] }>('/api/v1/cases/fields'),
+      this.getCaseTags(caseId),
     ])
 
     if (caseResp.status === 'rejected') throw caseResp.reason
 
     const caseData = caseResp.value.data
 
-    // Kayako returns tags as objects when using fields=+tags; normalize to strings
-    if (Array.isArray(caseData.tags)) {
-      caseData.tags = (caseData.tags as unknown[]).map(t => {
-        if (typeof t === 'string') return t
-        if (t && typeof t === 'object') {
-          const o = t as Record<string, unknown>
-          return String(o.name ?? o.tag ?? o.label ?? '')
-        }
-        return ''
-      }).filter(Boolean)
-    }
+    // Use dedicated tags endpoint result (avoids URLSearchParams encoding + as %2B)
+    caseData.tags = tagsResp.status === 'fulfilled' ? tagsResp.value : (caseData.tags ?? [])
 
     if (statuses.status === 'fulfilled') {
       const match = statuses.value.data?.find(s => s.id === caseData.status?.id)

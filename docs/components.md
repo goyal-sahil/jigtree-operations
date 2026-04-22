@@ -16,6 +16,7 @@ app/(dashboard)/analyser/page.tsx  [server]
   TicketAnalyser               [client — main state machine]
     CredentialsBanner          [client — missing credentials warning]
     TicketCard                 [client — ticket metadata]
+    Download .md button        [inline — in TicketAnalyser]
     ConversationThread         [client — post list with filter toggles]
     ─── tab: AI Analysis ───
     AIAnalysis                 [client — analysis display]
@@ -23,13 +24,17 @@ app/(dashboard)/analyser/page.tsx  [server]
     Timeline                   [client — date-grouped posts]
     ─── tab: Add Note ───
     AddNoteForm                [client — note textarea]
+    AnalysisHistory            [client — API usage history (analysis + download runs)]
 
-app/(dashboard)/bu-tickets/page.tsx  [client — BU/PS table]
+app/(dashboard)/bu-tickets/page.tsx  [server — async Server Component]
   CredentialsBanner
-  BUTicketsTable               [client — sortable/filterable table]
+  BUTicketsToolbar             [client — sync, delete-all, last-synced]
+  BUTicketsFilters             [client — search + collapsible filter panel + presets]
+  BUTicketsTable               [client — URL sort headers + pagination]
 
 app/(dashboard)/bu-tickets/[id]/page.tsx  [client — detail page]
   TicketCard                   [shared with Analyser]
+  Download .md button          [inline — in BuTicketDetailPage]
   ConversationThread           [shared with Analyser]
   ─── tab: AI Analysis ───
   AIAnalysis                   [shared with Analyser]
@@ -37,10 +42,13 @@ app/(dashboard)/bu-tickets/[id]/page.tsx  [client — detail page]
   Timeline                     [shared with Analyser]
   ─── tab: Add Note ───
   AddNoteForm                  [shared with Analyser]
-  AnalysisHistory              [BU/PS only — collapsible run log]
+  AnalysisHistory              [collapsible API usage history (analysis + download runs)]
 
 app/(dashboard)/settings/page.tsx  [server]
   SettingsForm                 [client — credential form]
+
+app/(dashboard)/admin/page.tsx  [server — admin-gated]
+  AdminPresetsTable            [client — all presets grouped by user]
 ```
 
 ---
@@ -56,17 +64,31 @@ app/(dashboard)/settings/page.tsx  [server]
 - `fetchError` — error from `/api/ticket`
 - `ticketData: TicketResponse | null` — full response (ticket + posts + fromCache + lastSyncedAt + warning)
 - `analysis: AnalysisResult | null` — result from `/api/analysis`
+- `analysisRuns: AnalysisRunRow[]` — run history from `/api/ticket` and reloaded after each run
 - `aiLoading` — loading state while analysis runs
 - `aiError` — error from `/api/analysis`
+- `exportInfo: ExportInfo | null` — cached export status from `/api/ticket`
+- `exporting` — loading state while export generates
+- `exportPhase: string` — current phase label ("Refreshing analysis…" / "Generating export…")
+- `exportError` — error from `/api/export`
 - `activeTab: 'ai' | 'timeline' | 'note'`
 - `missingKayako` / `missingAnthropic` — from `GET /api/credentials`, shown in `CredentialsBanner`
 
 **Key behaviours:**
 - On mount: fetches `/api/credentials` to check if credentials are set, shows `CredentialsBanner` if not
 - Pressing Enter in the input field triggers `doFetch(false)`
-- "Refresh" button in `TicketCard` calls `doFetch(true)` (`forceRefresh=true`) — re-fetches from Kayako and clears analysis
+- `doFetch(false)` — checks `data.cachedAnalysis`, `data.analysisRuns`, and `data.export` in the response; auto-populates AI tab and run history without extra API calls
+- "Refresh" button in `TicketCard` calls `doFetch(true)` (`forceRefresh=true`) — re-fetches from Kayako and clears analysis state
 - After a note is posted (`onNotePosted`): clears `analysis` then calls `doFetch(true)` to reload the ticket
-- AI tab shows "Run Analysis" button until first run; after that shows result with "Re-run" button
+- AI tab: auto-populates from `cachedAnalysis` on first load if analysis exists; shows "Run Analysis" button if not; shows "Re-run" button once analysis is loaded
+- **Download .md button**: shown when `postsStatus='done'`. `downloadExport(forceRefresh)`:
+  1. Checks `isAnalysisStale(ticket, analysis)` — stale if `Math.max(lastSyncedAt, postsLastSyncedAt) > analysis.created_at`
+  2. If stale or forceRefresh: re-runs analysis first, then reloads run history
+  3. Calls `POST /api/export` — receives `markdown` string
+  4. Triggers browser download via Blob + URL.createObjectURL
+  5. Reloads run history so the download entry appears immediately
+- **"↻ Regenerate" link**: shown next to Download button when `exportInfo?.status === 'done'`; calls `downloadExport(true)`
+- `<AnalysisHistory runs={analysisRuns} />` rendered below tabs when runs exist
 
 ---
 
@@ -185,6 +207,79 @@ Renders analysis cards using Lucide icons:
 
 ---
 
+## `BUTicketsToolbar`
+
+`components/BUTicketsToolbar.tsx` — client component.
+
+**Props:**
+```typescript
+{
+  lastSyncedAt: string | null   // ISO — shown as "Last synced: ..."
+  isAdmin:      boolean
+  totalCount:   number          // unfiltered total for display
+}
+```
+
+**Features:**
+- **Sync Now** — `POST /api/bu-tickets/sync`, then fires `sync-posts` and `analyse-batch` background jobs; shows elapsed timer while running
+- **Delete All** — admin only; `DELETE /api/bu-tickets`; requires confirmation dialog
+- Calls `router.refresh()` after each mutation so the Server Component re-runs
+
+---
+
+## `BUTicketsFilters`
+
+`components/BUTicketsFilters.tsx` — client component. Manages all filter/preset UI.
+
+**Props:**
+```typescript
+{
+  filters:   BuTicketsListFilters  // current applied filters (parsed from URL)
+  options:   FilterOptions         // available values for each checkbox group
+  currentQS: string                // canonical filter signature (page=1)
+  presets:   FilterPresetRow[]     // own + shared presets, default-first
+  userId:    string                // current user UUID for ownership check
+}
+```
+
+**Layout:**
+1. **Search bar** — always visible above the filter panel; debounced 350 ms; updates URL live without requiring Apply. Uses `useSearchParams()` inside the timeout to avoid stale closure (not `filters` prop, which is stale inside `setTimeout`).
+2. **Filter toggle row** — "▸ Filters" / "▾ Filters" button + active count badge + preset pills + "Save preset" button
+3. **Collapsible filter panel** — auto-opens when `countActiveFilters > 0`
+
+**NProgress integration:**
+- `navigate(url)` helper: `NProgress.start()` then `router.push(url)` — gives instant visual feedback on Apply, preset click, Clear
+- `useEffect([searchParams.toString()])` calls `NProgress.done()` when URL actually changes
+- `nextjs-toploader` only intercepts `<a>` tag clicks — does NOT fire for programmatic `router.push()`
+
+**Draft state sync:**
+Uses `useEffect([paramsSig])` to sync checkbox draft from `filters` prop when URL changes — without remounting. This preserves in-progress checkbox selections when the debounced search navigates the URL. `paramsSig = serializeBuTicketsParams(filters).toString()`.
+
+**Checkbox groups** (via `ScrollableCheckboxGroup`):
+- Status, Priority, Team, Product, Blocker Type, Age Risk (labelled), Escalated (single boolean)
+- Each group: `max-h-36 overflow-y-auto` scrollable list + "All · None" mini links
+- Changes update local `draft` state; committed only on "Apply Filters"
+
+**Preset pills** (inline with filter toggle button):
+- Active preset = blue background; ★ prefix for own default; "Shared" badge for other users' SHARED presets
+- Click navigates immediately to `?${preset.filtersJson}`
+
+**Update preset button:**
+- Shown when `draftSig !== activeOwnPreset?.filtersJson` (draft differs from active own preset)
+- Calls `updateBuTicketFilterPresetFilters(id, draftSig)` — overwrites saved filters in-place
+
+**Preset management** (inside filter panel, own presets only):
+- ★ button toggles default (`setDefaultBuTicketFilterPreset` / `clearDefaultBuTicketFilterPreset`)
+- Eye/badge button toggles visibility (`toggleBuTicketFilterPresetVisibility`) — pill shows "Shared" (emerald) or "Private" (slate)
+- ✕ button: shows inline "Delete? Yes / No" confirmation via `deleteConfirmId` state (no modal)
+- All preset actions use `useTransition` + `loadingId` for per-item spinners; global `isPending` disables all buttons during any transition
+
+**Save preset dialog** (inline):
+- Name text input + visibility selector + Save/Cancel
+- Calls `createBuTicketFilterPreset` Server Action via `useTransition`
+
+---
+
 ## `BUTicketsTable`
 
 `components/BUTicketsTable.tsx` — client component.
@@ -192,26 +287,23 @@ Renders analysis cards using Lucide icons:
 **Props:**
 ```typescript
 {
-  tickets:       TicketRow[]
-  lastSyncedAt:  string | null
-  syncStatus:    string | null
-  syncElapsed:   number
-  isAdmin:       boolean
-  onSync:        () => Promise<void>
-  onDelete:      (ids: string[]) => Promise<void>
-  onDeleteAll:   () => Promise<void>
+  tickets:  TicketRow[]
+  total:    number              // filtered count for pagination
+  filters:  BuTicketsListFilters
+  isAdmin:  boolean
 }
 ```
 
 **Columns**: ID (links to `/bu-tickets/[id]` + external Kayako icon), Esc, Team, Title, One-liner (AI), Blocker Type (AI), Product, Customer, Priority, Status, Age Risk, Last Analysed.
 
 **Features:**
-- Client-side text filter (search across title, customer, one-liner)
-- Sortable by any column (click header to toggle asc/desc)
-- Pagination: 25 / 50 / all rows
-- Sync button with elapsed timer and status message
-- Age risk badge: `overdue` (red) / `at-risk` (amber) / `ok` (green) based on ticket age and status
-- Admin (email in `NEXT_PUBLIC_ADMIN_EMAILS`): checkbox row selection, "Delete selected", "Delete All" with confirmation
+- **URL sort headers** — `<Link href={buTicketsSortHref(searchParams, field)}>` per column; active column shows ↑/↓; no click handlers
+- **Pagination footer** — prev/next + page number buttons (ellipsis style via `buildPageRange`) + page size selector (25/50/100); all `<Link>` elements
+- **Column visibility dropdown** — all columns visible by default; `id` always-visible (toggle disabled); click-outside close via `useRef`/`useEffect`; "Reset to defaults" button
+- **CSV export** — async `exportToCsv()`: fetches `GET /api/bu-tickets/export?${searchParams.toString()}` (ALL filtered rows, not current page); BOM-prefixed for Excel; escapes cells; respects `visibleCols`; "Export CSV" button shows spinner + "Exporting…" while in flight
+- **Age risk badge** — `at_risk` (red) / `watch` (amber) / `ok` (green) computed from `kayakoCreatedAt`
+- **Delete selected** — admin only; checkbox selection + `DELETE /api/bu-tickets` then `router.refresh()`
+- Uses `useSearchParams()` to build current-aware sort/page hrefs
 
 ---
 
@@ -232,7 +324,10 @@ Shown at the top of both the Ticket Analyser and BU/PS Tickets pages. Renders a 
 Left navigation with icon + label items:
 - Hub (/)
 - Ticket Analyser (/analyser)
-- BU/PS Tickets (/bu-tickets)
+- **Support Tickets** section (collapsible):
+  - BU/PS Tickets (/bu-tickets)
+- **Admin** section (shown only when `process.env.NEXT_PUBLIC_ADMIN_EMAILS` includes the current user's email):
+  - Administration (/admin)
 
 Active route is highlighted. User email is shown in the footer. Sign-out button calls `supabase.auth.signOut()`.
 
@@ -242,7 +337,22 @@ Active route is highlighted. User email is shown in the footer. Sign-out button 
 
 `components/HubPage.tsx` — client component. Rendered on `app/(dashboard)/page.tsx`.
 
-Tile grid linking to the two main tools (Ticket Analyser + BU/PS Tickets).
+Tile grid linking to the main tools. For admin users (email in `NEXT_PUBLIC_ADMIN_EMAILS`), also shows an "Administration" tile section. Tiles: Ticket Analyser, BU/PS Tickets, and (admin) Administration.
+
+---
+
+## `AdminPresetsTable`
+
+`components/AdminPresetsTable.tsx` — client component. Rendered on `app/(dashboard)/admin/page.tsx`.
+
+**Props:**
+```typescript
+{ presets: FilterPresetRow[] }
+```
+
+Displays all filter presets in the system, grouped by user (email). Each row shows: preset name, visibility badge (PERSONAL/SHARED), default star, `filtersJson` (canonical QS). Admin can delete any preset via `adminDeleteFilterPreset` Server Action from `app/actions/admin.actions.ts`.
+
+The admin page server component checks `ADMIN_EMAILS` env var and redirects non-admins to `/`.
 
 ---
 
@@ -270,18 +380,29 @@ Submits to `POST /api/settings`. On success redirects to `/` (first login) or sh
 
 ## `AnalysisHistory`
 
-`components/AnalysisHistory.tsx` — client component. Rendered on the BU/PS ticket detail page below the tabs section when at least one analysis run exists.
+`components/AnalysisHistory.tsx` — client component. Rendered on **both** the Ticket Analyser and BU/PS ticket detail page below the tabs section when at least one run exists.
 
 **Props:**
 ```typescript
 { runs: AnalysisRunRow[] }
 ```
 
-`AnalysisRunRow` shape: `{ id, trigger, modelUsed, postCount, inputTokens, outputTokens, durationMs, status, errorMsg, createdAt, inputCostUsd, outputCostUsd, totalCostUsd, isOrphaned? }`
+`AnalysisRunRow` is defined in `types/kayako.ts` (re-exported from `AnalysisHistory` for backward compatibility):
+```typescript
+{
+  id, trigger, runType, modelUsed, postCount,
+  inputTokens, outputTokens, durationMs,
+  status, errorMsg, createdAt,
+  inputCostUsd, outputCostUsd, totalCostUsd,
+  isOrphaned?
+}
+```
 
 **Renders:**
-- Collapsed by default — header shows run count and total cost
-- When expanded: 11-column table (When, Trigger, Status, Model, Posts, In tokens, Out tokens, In cost, Out cost, Total cost, Duration)
+- Header: "📋 API Usage History (N)" + total cost (was "Analysis Run History" — renamed to cover both analysis and download runs)
+- Collapsed by default — click to expand
+- When expanded: **12-column table** — Type, When, Trigger, Status, Model, Posts, In tokens, Out tokens, In cost, Out cost, Total cost, Duration
+- **Type column** (first): badge showing run type — "Analysis" (blue) or "Download" (emerald)
 - `<tfoot>` row showing total cost across all runs
 - Orphaned runs (from a previous import) shown with amber "orphaned" label + tooltip
 - Model display strips `claude-` prefix and date suffix for readability (e.g. `haiku-4-5` instead of `claude-haiku-4-5-20251001`)

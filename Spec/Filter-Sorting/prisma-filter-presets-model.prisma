@@ -1,28 +1,34 @@
-// Template Prisma model for per-user filter presets.
-// Adjust model/enum names to match your app conventions.
+// Template Prisma model for per-user, multi-feature filter presets.
+// Adjust relation target to match your user model.
+// If each feature has its own presets table, drop the `module` field and @@unique/@@index.
 
 enum FilterPresetVisibility {
-  PRIVATE
+  PERSONAL
   SHARED
 }
 
 model FilterPreset {
-  id                    String                 @id @default(uuid())
-  userId                String
-  module                String
-  name                  String
-  queryString           String                 @db.Text
-  isDefault             Boolean                @default(false)
-  includeViewInIdentity Boolean                @default(false)
-  visibility            FilterPresetVisibility @default(PRIVATE)
-  createdAt             DateTime               @default(now())
-  updatedAt             DateTime               @updatedAt
+  id          String                 @id @default(uuid())
+  userId      String
+  module      String                 // feature key, e.g. "orders", "tickets" — scope presets per page
+  name        String
+  filtersJson String                 @db.Text  // canonical QS produced by moduleFilterSignature()
+  isDefault   Boolean                @default(false)
+  visibility  FilterPresetVisibility @default(PERSONAL)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
 
+  // Adjust the relation to your user model.
+  // If auth is via Supabase and you have a UserSettings table keyed by userId, use that:
+  //   settings UserSettings @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  // For a standard User model:
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, module, name])
   @@index([userId, module, isDefault])
   @@index([userId, module, createdAt])
+  @@map("filter_presets")
 }
 
-// Assumes `User` model exists.
+// Note: @@unique([userId, module, name]) is intentionally omitted.
+// Multiple presets with the same name are allowed — users can have "My view" multiple times
+// (e.g. personal + shared variants). Enforce uniqueness in the UI if desired.

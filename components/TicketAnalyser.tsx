@@ -1,15 +1,26 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import type { TicketResponse, AnalysisResult } from '@/types/kayako'
+import type { TicketResponse, AnalysisResult, ExportInfo, AnalysisRunRow } from '@/types/kayako'
 import TicketCard from './TicketCard'
 import ConversationThread from './ConversationThread'
 import AIAnalysis from './AIAnalysis'
 import Timeline from './Timeline'
 import AddNoteForm from './AddNoteForm'
 import CredentialsBanner from './CredentialsBanner'
+import AnalysisHistory from './AnalysisHistory'
 
 type Tab = 'ai' | 'timeline' | 'note'
+
+function isAnalysisStale(ticket: TicketResponse['ticket'], analysis: AnalysisResult | null): boolean {
+  if (!analysis?.created_at) return false
+  // Use the later of lastSyncedAt and postsLastSyncedAt — Sync Now only updates lastSyncedAt
+  const fetchMs = Math.max(
+    new Date(ticket.lastSyncedAt).getTime(),
+    ticket.postsLastSyncedAt ? new Date(ticket.postsLastSyncedAt).getTime() : 0,
+  )
+  return fetchMs > new Date(analysis.created_at).getTime()
+}
 
 export default function TicketAnalyser() {
   const [input,      setInput]      = useState('')
@@ -17,10 +28,16 @@ export default function TicketAnalyser() {
   const [fetchError, setFetchError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
 
-  const [ticketData, setTicketData] = useState<TicketResponse | null>(null)
-  const [analysis,   setAnalysis]   = useState<AnalysisResult | null>(null)
-  const [aiLoading,  setAiLoading]  = useState(false)
-  const [aiError,    setAiError]    = useState('')
+  const [ticketData,   setTicketData]   = useState<TicketResponse | null>(null)
+  const [analysis,     setAnalysis]     = useState<AnalysisResult | null>(null)
+  const [analysisRuns, setAnalysisRuns] = useState<AnalysisRunRow[]>([])
+  const [aiLoading,    setAiLoading]    = useState(false)
+  const [aiError,      setAiError]      = useState('')
+
+  const [exportInfo,  setExportInfo]  = useState<ExportInfo | null>(null)
+  const [exporting,   setExporting]   = useState(false)
+  const [exportPhase, setExportPhase] = useState('')   // '' | 'Refreshing analysis…' | 'Generating export…'
+  const [exportError, setExportError] = useState('')
 
   const [activeTab,        setActiveTab]        = useState<Tab>('ai')
   const [missingKayako,    setMissingKayako]    = useState(false)
@@ -44,7 +61,11 @@ export default function TicketAnalyser() {
       setFetching(true)
       setTicketData(null)
       setAnalysis(null)
+      setAnalysisRuns([])
       setAiError('')
+      setExportInfo(null)
+      setExportError('')
+      setExportPhase('')
     }
 
     const resp = await fetch('/api/ticket', {
@@ -64,12 +85,18 @@ export default function TicketAnalyser() {
 
     const data = await resp.json() as TicketResponse
     setTicketData(data)
-    if (forceRefresh) setAnalysis(null)
+    setExportInfo(data.export ?? null)
+    setAnalysisRuns(data.analysisRuns ?? [])
+    if (forceRefresh) {
+      setAnalysis(null)
+    } else if (data.cachedAnalysis) {
+      setAnalysis(data.cachedAnalysis)
+    }
   }
 
   // ── Run AI analysis ─────────────────────────────────────────────────────────
-  async function runAnalysis(forceRefresh = false) {
-    if (!ticketData) return
+  async function runAnalysis(forceRefresh = false): Promise<AnalysisResult | null> {
+    if (!ticketData) return null
     setAiLoading(true)
     setAiError('')
 
@@ -88,10 +115,85 @@ export default function TicketAnalyser() {
     if (!resp.ok) {
       const data = await resp.json()
       setAiError(data.error ?? 'AI analysis failed.')
-      return
+      return null
     }
 
-    setAnalysis(await resp.json())
+    const result = await resp.json() as AnalysisResult
+    setAnalysis(result)
+    return result
+  }
+
+  // ── Download markdown export ────────────────────────────────────────────────
+  async function downloadExport(forceRefresh = false) {
+    if (!ticketData) return
+    setExporting(true)
+    setExportError('')
+    setExportPhase('')
+
+    const stale = isAnalysisStale(ticketData.ticket, analysis)
+    let needsForceExport = forceRefresh || stale
+
+    try {
+      // Refresh analysis first if stale (or when regenerating)
+      if (stale || forceRefresh) {
+        setExportPhase('Refreshing analysis…')
+        const freshAnalysis = await runAnalysis(true)
+        if (freshAnalysis) needsForceExport = true
+
+        // Reload runs so the new analysis entry appears
+        const runsRes = await fetch('/api/ticket', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ ticketInput: String(ticketData.ticket.kayakoTicketId), forceRefresh: false }),
+        })
+        if (runsRes.ok) {
+          const fresh = await runsRes.json() as TicketResponse
+          setAnalysisRuns(fresh.analysisRuns ?? [])
+        }
+      }
+
+      setExportPhase('Generating export…')
+      const resp = await fetch('/api/export', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseId:      ticketData.ticket.kayakoTicketId,
+          forceRefresh: needsForceExport,
+        }),
+      })
+
+      if (!resp.ok) {
+        const data = await resp.json()
+        setExportError(data.error ?? 'Export failed.')
+        return
+      }
+
+      const { markdown } = await resp.json() as { markdown: string; fromCache: boolean }
+      setExportInfo({ status: 'done', createdAt: new Date().toISOString() })
+
+      // Reload runs so the download entry appears
+      const runsRes = await fetch('/api/ticket', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ticketInput: String(ticketData.ticket.kayakoTicketId), forceRefresh: false }),
+      })
+      if (runsRes.ok) {
+        const fresh = await runsRes.json() as TicketResponse
+        setAnalysisRuns(fresh.analysisRuns ?? [])
+      }
+
+      // Trigger browser file download
+      const blob = new Blob([markdown], { type: 'text/markdown' })
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `ticket-${ticketData.ticket.kayakoTicketId}.md`
+      a.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setExporting(false)
+      setExportPhase('')
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -100,8 +202,12 @@ export default function TicketAnalyser() {
       setInput('')
       setTicketData(null)
       setAnalysis(null)
+      setAnalysisRuns([])
       setFetchError('')
       setAiError('')
+      setExportInfo(null)
+      setExportError('')
+      setExportPhase('')
     }
   }
 
@@ -111,6 +217,7 @@ export default function TicketAnalyser() {
   }
 
   const requesterKayakoId = ticketData?.ticket.requesterKayakoId ?? null
+  const postsReady        = ticketData?.ticket.postsStatus === 'done'
 
   return (
     <div>
@@ -156,6 +263,33 @@ export default function TicketAnalyser() {
             onRefresh={() => void doFetch(true)}
             refreshing={refreshing}
           />
+
+          {/* Download export button */}
+          {postsReady && (
+            <div className="flex items-center gap-3 mb-4">
+              <button
+                onClick={() => void downloadExport(false)}
+                disabled={exporting}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition shadow-sm"
+              >
+                {exporting
+                  ? <><span className="animate-spin inline-block">⏳</span> {exportPhase || 'Generating…'}</>
+                  : <>⬇ Download .md</>
+                }
+              </button>
+              {exportInfo?.status === 'done' && !exporting && (
+                <button
+                  onClick={() => void downloadExport(true)}
+                  className="text-xs text-slate-500 hover:text-slate-700 underline"
+                >
+                  ↻ Regenerate
+                </button>
+              )}
+              {exportError && (
+                <span className="text-xs text-red-600">❌ {exportError}</span>
+              )}
+            </div>
+          )}
 
           {ticketData.warning && (
             <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-xl px-5 py-3 mb-4 text-sm">
@@ -242,6 +376,13 @@ export default function TicketAnalyser() {
               caseId={ticketData.ticket.kayakoTicketId}
               onSuccess={onNotePosted}
             />
+          )}
+
+          {/* API usage history */}
+          {analysisRuns.length > 0 && (
+            <div className="mt-6">
+              <AnalysisHistory runs={analysisRuns} />
+            </div>
           )}
         </>
       )}

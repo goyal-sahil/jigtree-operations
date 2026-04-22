@@ -7,7 +7,7 @@ A multi-user operations web application for the JigTree BU Support team. It prov
 - **Ticket Analyser** — load any Kayako ticket, read the full conversation, run AI analysis, view a day-by-day timeline, post internal notes
 - **BU/PS Tickets** — live table of all tickets from Kayako view #64 (JigTree BU Tickets), cached in PostgreSQL with full post history and a per-ticket detail page
 
-Deployed at **https://jigtree-operations.vercel.app**. GitHub: `goyal-sahil/jigtree-operations`.
+Deployed at **https://jigtree-operations.vercel.app** (v1.0.0). GitHub: `goyal-sahil/jigtree-operations`. Phases 1–15 complete + post-launch fixes + Phase 17.1 (Admin). Phase 16 (Notion Portfolio) planned.
 
 This is a parallel build to the Streamlit tool at `C:\Users\sahil\CoWork\Central Kayako Tickets\`. The Streamlit tool is kept as-is; this app is the web-deployable multi-user version. Feature parity is intentional — the same conversation layout, the same AI prompt, the same model selection logic, the same pagination strategy.
 
@@ -41,15 +41,17 @@ Browser (React)
     │   ├── doFetch()       → POST /api/ticket  (DB-first; returns TicketResponse)
     │   ├── runAnalysis()   → POST /api/analysis (reads from DB)
     │   └── onNotePosted()  → POST /api/note
-    └── /bu-tickets     BUTicketsTable + detail page
-        ├── load()              → GET /api/bu-tickets
-        ├── onSync()            → POST /api/bu-tickets/sync
-        │     ├── background:   POST /api/bu-tickets/sync-posts
-        │     └── background:   POST /api/bu-tickets/analyse-batch
-        └── /bu-tickets/[id]    BuTicketDetailPage
-              ├── load()         → GET /api/bu-tickets/[id]
-              ├── refreshTicket() → POST /api/bu-tickets/[id]/refresh
-              └── runAnalysis()  → POST /api/analysis
+    ├── /bu-tickets     Server Component page + Client Components
+    │   ├── Server fetch    → fetchBuTicketsPage() [Prisma, server-only]
+    │   ├── BUTicketsFilters  navigate() → router.push() (NProgress)
+    │   ├── BUTicketsToolbar  → POST /api/bu-tickets/sync + DELETE /api/bu-tickets
+    │   ├── BUTicketsTable    CSV export → GET /api/bu-tickets/export
+    │   └── /bu-tickets/[id]  BuTicketDetailPage
+    │         ├── load()          → GET /api/bu-tickets/[id]
+    │         ├── refreshTicket() → POST /api/bu-tickets/[id]/refresh
+    │         ├── runAnalysis()   → POST /api/analysis
+    │         └── downloadExport() → POST /api/export
+    └── /admin          AdminPresetsTable [admin-gated]
 
 API Layer (Next.js Route Handlers, Vercel serverless)
 │
@@ -57,12 +59,14 @@ API Layer (Next.js Route Handlers, Vercel serverless)
 ├── /api/credentials          GET hasKayako / hasAnthropic booleans
 ├── /api/ticket               DB-first fetch; calls fetchAndPersistTicket on miss
 ├── /api/analysis             AI analysis — reads ticket+posts from DB
+├── /api/export               Markdown export — generates + caches .md file per user per ticket
 ├── /api/note                 Post an internal note to Kayako
 ├── /api/bu-tickets           GET all BU/PS tickets from DB; DELETE (admin)
+├── /api/bu-tickets/export    GET all filtered rows for CSV download (all pages)
 ├── /api/bu-tickets/sync      POST — full sync from Kayako view 64
 ├── /api/bu-tickets/sync-posts     POST — background post fetch (10/run)
 ├── /api/bu-tickets/analyse-batch  POST — background AI analysis (5/run)
-├── /api/bu-tickets/[id]      GET single ticket + posts + analysis
+├── /api/bu-tickets/[id]      GET single ticket + posts + analysis + export + runs
 └── /api/bu-tickets/[id]/refresh   POST — re-fetch from Kayako, persist
 
 Data Layer
@@ -72,8 +76,10 @@ Data Layer
     ├── Ticket          unified ticket cache (Analyser + BU/PS sync)
     ├── TicketPost      all posts per ticket
     ├── TicketAnalysis  cached AI analyses (per user+ticket)
+    ├── TicketExport    cached markdown exports (per user+ticket)
     ├── ModelPricing    Anthropic pricing rates by date range
-    └── AnalysisRun     append-only log of every AI analysis attempt
+    ├── AnalysisRun     append-only log of every Anthropic API call (analysis + download)
+    └── FilterPreset    saved URL-filter presets for BU/PS Tickets (personal + shared)
 ```
 
 ### DB-First Pattern
@@ -99,17 +105,20 @@ Central Kayako Tickets (Vercel)/
 │   │   ├── layout.tsx                      Auth guard + Sidebar + main content
 │   │   ├── page.tsx                        JigTree Operations Hub (tile grid)
 │   │   ├── analyser/page.tsx               Ticket Analyser
-│   │   ├── bu-tickets/page.tsx             BU/PS Tickets table (client component)
-│   │   ├── bu-tickets/[id]/page.tsx        BU/PS ticket detail page (client component)
+│   │   ├── bu-tickets/page.tsx             BU/PS Tickets (async Server Component — URL-driven)
+│   │   ├── bu-tickets/[id]/page.tsx        BU/PS ticket detail page
+│   │   ├── admin/page.tsx                  Admin section (admin-gated, Phase 17.1)
 │   │   └── settings/page.tsx              Settings page → SettingsForm
 │   └── api/
 │       ├── settings/route.ts               GET + POST credentials
 │       ├── credentials/route.ts            GET hasKayako / hasAnthropic
 │       ├── ticket/route.ts                 POST DB-first ticket fetch
 │       ├── analysis/route.ts               POST run / serve cached AI analysis
+│       ├── export/route.ts                 POST generate / serve cached markdown export
 │       ├── note/route.ts                   POST add internal note
 │       └── bu-tickets/
 │           ├── route.ts                    GET all BU/PS tickets; DELETE (admin)
+│           ├── export/route.ts             GET all filtered rows for CSV download
 │           ├── sync/route.ts               POST sync from Kayako view 64
 │           ├── sync-posts/route.ts         POST background post fetch
 │           ├── analyse-batch/route.ts      POST background AI analysis
@@ -129,8 +138,11 @@ Central Kayako Tickets (Vercel)/
 │   ├── AIAnalysis.tsx                      AI analysis display + re-run button
 │   ├── Timeline.tsx                        Date-grouped posts + AI day summaries (UnifiedPost[])
 │   ├── AddNoteForm.tsx                     Internal note textarea + submit
-│   ├── AnalysisHistory.tsx                 Collapsible analysis run log with cost columns
-│   └── BUTicketsTable.tsx                  Sortable BU/PS ticket table with sync controls
+│   ├── AnalysisHistory.tsx                 Collapsible API usage history (analysis + download runs)
+│   ├── BUTicketsToolbar.tsx                Sync Now + Delete All + last-synced display
+│   ├── BUTicketsFilters.tsx                Search + filter panel + preset management (NProgress)
+│   ├── BUTicketsTable.tsx                  URL sort + pagination + column visibility + CSV export
+│   └── AdminPresetsTable.tsx               Admin: all filter presets grouped by user + delete
 │
 ├── lib/
 │   ├── prisma.ts                           Singleton PrismaClient
@@ -144,15 +156,22 @@ Central Kayako Tickets (Vercel)/
 │   ├── kayako/
 │   │   ├── client.ts                       KayakoClient class + helpers
 │   │   └── ticketService.ts                fetchAndPersistTicket + converters (shared service)
-│   └── anthropic/
-│       └── client.ts                       analyseTicket(), detectModel()
+│   ├── anthropic/
+│   │   └── client.ts                       analyseTicket(), detectModel(), generateTicketMarkdown()
+│   ├── bu-tickets-list-filters.ts          Pure: parse URL → typed filters; serialize; sort/page hrefs
+│   └── bu-tickets-list-query.ts            Server-only: Prisma WHERE builder; paginated fetch; CSV fetch
 │
 ├── types/
 │   └── kayako.ts                           All Kayako + app types
 │                                           (KayakoCase, KayakoPost, UnifiedPost, TicketRow, TicketResponse, AnalysisResult)
 │
+├── app/
+│   └── actions/
+│       ├── bu-ticket-filter-presets.actions.ts  Server Actions: preset CRUD + visibility + update
+│       └── admin.actions.ts                     Admin Server Action: adminDeleteFilterPreset
+│
 ├── prisma/
-│   ├── schema.prisma                       6 DB models: UserSettings, Ticket, TicketPost, TicketAnalysis, ModelPricing, AnalysisRun
+│   ├── schema.prisma                       8 DB models: UserSettings, Ticket, TicketPost, TicketAnalysis, TicketExport, ModelPricing, AnalysisRun, FilterPreset
 │   └── seed-pricing.sql                    INSERT for haiku-4-5 and sonnet-4-6 pricing rows
 │
 ├── docs/
@@ -172,8 +191,9 @@ Central Kayako Tickets (Vercel)/
 ├── next.config.mjs                         Next.js config
 ├── vercel.json                             Vercel framework config
 ├── tailwind.config.ts                      Tailwind content paths
-├── tsconfig.json                           TypeScript config (target ES2017)
-├── package.json                            Dependencies + npm scripts
+├── tsconfig.json                           TypeScript config (target ES2017; Spec/ excluded)
+├── package.json                            Dependencies + npm scripts (version 1.0.0)
+├── CHANGELOG.md                            Version history (introduced at v1.0.0)
 └── PLAN.md                                 Full build plan + phase checklist
 ```
 

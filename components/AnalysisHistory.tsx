@@ -4,23 +4,9 @@ import { useState } from 'react'
 import { useTimezone } from '@/components/TimezoneProvider'
 import { formatDateTime } from '@/lib/tz'
 import { formatCostUsd } from '@/lib/pricing'
+import type { AnalysisRunRow } from '@/types/kayako'
 
-export interface AnalysisRunRow {
-  id:            string
-  trigger:       string
-  modelUsed:     string | null
-  postCount:     number | null
-  inputTokens:   number | null
-  outputTokens:  number | null
-  durationMs:    number | null
-  status:        string
-  errorMsg:      string | null
-  createdAt:     string
-  inputCostUsd:  number | null
-  outputCostUsd: number | null
-  totalCostUsd:  number | null
-  isOrphaned?:   boolean
-}
+export type { AnalysisRunRow }
 
 interface Props {
   runs: AnalysisRunRow[]
@@ -35,6 +21,16 @@ const TRIGGER_LABELS: Record<string, string> = {
 const STATUS_STYLES: Record<string, string> = {
   done:  'bg-green-100 text-green-700',
   error: 'bg-red-100 text-red-700',
+}
+
+const RUN_TYPE_STYLES: Record<string, string> = {
+  analysis: 'bg-blue-100 text-blue-700',
+  download: 'bg-emerald-100 text-emerald-700',
+}
+
+const RUN_TYPE_LABELS: Record<string, string> = {
+  analysis: 'Analysis',
+  download: 'Download',
 }
 
 function fmt(n: number | null | undefined): string {
@@ -70,7 +66,7 @@ export default function AnalysisHistory({ runs }: Props) {
       >
         <div className="flex items-center gap-3">
           <span className="font-semibold text-slate-800 text-sm">
-            📋 Analysis Run History ({runs.length})
+            📋 API Usage History ({runs.length})
           </span>
           {totalCost != null && (
             <span className="text-xs text-slate-500">
@@ -83,9 +79,10 @@ export default function AnalysisHistory({ runs }: Props) {
 
       {expanded && (
         <div className="px-5 pb-5 overflow-x-auto">
-          <table className="w-full text-xs min-w-[800px]">
+          <table className="w-full text-xs min-w-[900px]">
             <thead>
               <tr className="text-slate-500 border-b border-slate-100">
+                <th className="text-left py-2 pr-3 font-semibold">Type</th>
                 <th className="text-left py-2 pr-3 font-semibold">When</th>
                 <th className="text-left py-2 pr-3 font-semibold">Trigger</th>
                 <th className="text-left py-2 pr-3 font-semibold">Status</th>
@@ -100,44 +97,52 @@ export default function AnalysisHistory({ runs }: Props) {
               </tr>
             </thead>
             <tbody>
-              {runs.map(r => (
-                <tr key={r.id} className="border-b border-slate-50 hover:bg-slate-50">
-                  <td className="py-2 pr-3 text-slate-600 whitespace-nowrap">
-                    {formatDateTime(r.createdAt, tz)}
-                    {r.isOrphaned && (
-                      <span className="ml-1.5 text-xs text-amber-500" title="Run from a previous import of this ticket">orphaned</span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 text-slate-700">
-                    {TRIGGER_LABELS[r.trigger] ?? r.trigger}
-                  </td>
-                  <td className="py-2 pr-3">
-                    <span className={`px-2 py-0.5 rounded-full font-medium ${STATUS_STYLES[r.status] ?? 'bg-slate-100 text-slate-600'}`}>
-                      {r.status}
-                    </span>
-                    {r.errorMsg && (
-                      <span className="ml-2 text-red-500 italic">{r.errorMsg}</span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 text-slate-600 font-mono whitespace-nowrap">
-                    {r.modelUsed
-                      ? r.modelUsed.replace('claude-', '').replace(/-\d{8}$/, '')
-                      : '—'}
-                  </td>
-                  <td className="py-2 pr-3 text-right text-slate-700">{fmt(r.postCount)}</td>
-                  <td className="py-2 pr-3 text-right text-slate-700">{fmt(r.inputTokens)}</td>
-                  <td className="py-2 pr-3 text-right text-slate-700">{fmt(r.outputTokens)}</td>
-                  <td className="py-2 pr-3 text-right text-slate-500">{formatCostUsd(r.inputCostUsd)}</td>
-                  <td className="py-2 pr-3 text-right text-slate-500">{formatCostUsd(r.outputCostUsd)}</td>
-                  <td className="py-2 pr-3 text-right font-semibold text-slate-700">{formatCostUsd(r.totalCostUsd)}</td>
-                  <td className="py-2 text-right text-slate-700">{fmtDuration(r.durationMs)}</td>
-                </tr>
-              ))}
+              {runs.map(r => {
+                const rType = r.runType ?? 'analysis'
+                return (
+                  <tr key={r.id} className="border-b border-slate-50 hover:bg-slate-50">
+                    <td className="py-2 pr-3">
+                      <span className={`px-2 py-0.5 rounded-full font-medium ${RUN_TYPE_STYLES[rType] ?? 'bg-slate-100 text-slate-600'}`}>
+                        {RUN_TYPE_LABELS[rType] ?? rType}
+                      </span>
+                    </td>
+                    <td className="py-2 pr-3 text-slate-600 whitespace-nowrap">
+                      {formatDateTime(r.createdAt, tz)}
+                      {r.isOrphaned && (
+                        <span className="ml-1.5 text-xs text-amber-500" title="Run from a previous import of this ticket">orphaned</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-slate-700">
+                      {TRIGGER_LABELS[r.trigger] ?? r.trigger}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <span className={`px-2 py-0.5 rounded-full font-medium ${STATUS_STYLES[r.status] ?? 'bg-slate-100 text-slate-600'}`}>
+                        {r.status}
+                      </span>
+                      {r.errorMsg && (
+                        <span className="ml-2 text-red-500 italic">{r.errorMsg}</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3 text-slate-600 font-mono whitespace-nowrap">
+                      {r.modelUsed
+                        ? r.modelUsed.replace('claude-', '').replace(/-\d{8}$/, '')
+                        : '—'}
+                    </td>
+                    <td className="py-2 pr-3 text-right text-slate-700">{fmt(r.postCount)}</td>
+                    <td className="py-2 pr-3 text-right text-slate-700">{fmt(r.inputTokens)}</td>
+                    <td className="py-2 pr-3 text-right text-slate-700">{fmt(r.outputTokens)}</td>
+                    <td className="py-2 pr-3 text-right text-slate-500">{formatCostUsd(r.inputCostUsd)}</td>
+                    <td className="py-2 pr-3 text-right text-slate-500">{formatCostUsd(r.outputCostUsd)}</td>
+                    <td className="py-2 pr-3 text-right font-semibold text-slate-700">{formatCostUsd(r.totalCostUsd)}</td>
+                    <td className="py-2 text-right text-slate-700">{fmtDuration(r.durationMs)}</td>
+                  </tr>
+                )
+              })}
             </tbody>
             {totalCost != null && (
               <tfoot>
                 <tr className="border-t-2 border-slate-200 bg-slate-50">
-                  <td colSpan={9} className="py-2 pr-3 text-right text-slate-500 font-semibold">
+                  <td colSpan={10} className="py-2 pr-3 text-right text-slate-500 font-semibold">
                     Total ({runs.length} run{runs.length !== 1 ? 's' : ''})
                   </td>
                   <td className="py-2 pr-3 text-right font-bold text-slate-800">

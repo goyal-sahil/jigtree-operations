@@ -9,8 +9,7 @@ import ConversationThread from '@/components/ConversationThread'
 import Timeline from '@/components/Timeline'
 import AddNoteForm from '@/components/AddNoteForm'
 import AnalysisHistory from '@/components/AnalysisHistory'
-import type { AnalysisResult, TicketResponse } from '@/types/kayako'
-import type { AnalysisRunRow } from '@/components/AnalysisHistory'
+import type { AnalysisResult, TicketResponse, ExportInfo, AnalysisRunRow } from '@/types/kayako'
 
 type Tab = 'ai' | 'timeline' | 'note'
 
@@ -29,6 +28,11 @@ export default function BuTicketDetailPage() {
   const [aiError,      setAiError]      = useState('')
   const [tab,          setTab]          = useState<Tab>('ai')
 
+  const [exportInfo,  setExportInfo]  = useState<ExportInfo | null>(null)
+  const [exporting,   setExporting]   = useState(false)
+  const [exportPhase, setExportPhase] = useState('')
+  const [exportError, setExportError] = useState('')
+
   const load = useCallback(async () => {
     try {
       const res = await fetch(`/api/bu-tickets/${ticketId}`)
@@ -45,9 +49,11 @@ export default function BuTicketDetailPage() {
           modelUsed: string | null; postCount: number | null
           errorMsg: string | null; updatedAt: string
         } | null
+        export:       ExportInfo | null
         analysisRuns: AnalysisRunRow[]
       }
       setTicketData({ ticket: data.ticket, posts: data.posts, fromCache: true, lastSyncedAt: data.lastSyncedAt })
+      setExportInfo(data.export ?? null)
       setAnalysisRuns(data.analysisRuns ?? [])
       if (data.analysis?.status === 'done' && data.analysis.sections) {
         setAnalysis({
@@ -96,8 +102,8 @@ export default function BuTicketDetailPage() {
     }
   }
 
-  async function runAnalysis(forceRefresh = false) {
-    if (!ticketData) return
+  async function runAnalysis(forceRefresh = false): Promise<AnalysisResult | null> {
+    if (!ticketData) return null
     setAiLoading(true)
     setAiError('')
     try {
@@ -114,17 +120,81 @@ export default function BuTicketDetailPage() {
         const body = await res.json() as { error?: string }
         throw new Error(body.error ?? 'Analysis failed')
       }
-      setAnalysis(await res.json() as AnalysisResult)
+      const result = await res.json() as AnalysisResult
+      setAnalysis(result)
       // Reload runs log so new entry appears immediately
       const runsRes = await fetch(`/api/bu-tickets/${ticketId}`)
       if (runsRes.ok) {
         const fresh = await runsRes.json() as { analysisRuns?: AnalysisRunRow[] }
         if (fresh.analysisRuns) setAnalysisRuns(fresh.analysisRuns)
       }
+      return result
     } catch (err: unknown) {
       setAiError(err instanceof Error ? err.message : 'Analysis failed')
+      return null
     } finally {
       setAiLoading(false)
+    }
+  }
+
+  async function downloadExport(forceRefresh = false) {
+    if (!ticketData) return
+    setExporting(true)
+    setExportError('')
+    setExportPhase('')
+
+    // Use the later of lastSyncedAt / postsLastSyncedAt — Sync Now only updates lastSyncedAt
+    const fetchMs = Math.max(
+      new Date(ticketData.lastSyncedAt).getTime(),
+      ticketData.ticket.postsLastSyncedAt ? new Date(ticketData.ticket.postsLastSyncedAt).getTime() : 0,
+    )
+    const stale = !!analysis?.created_at && fetchMs > new Date(analysis.created_at).getTime()
+    let needsForceExport = forceRefresh || stale
+
+    try {
+      // Refresh analysis first if stale or when regenerating
+      if (stale || forceRefresh) {
+        setExportPhase('Refreshing analysis…')
+        const freshAnalysis = await runAnalysis(true)
+        if (freshAnalysis) needsForceExport = true
+      }
+
+      setExportPhase('Generating export…')
+      const res = await fetch('/api/export', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseId:      ticketData.ticket.kayakoTicketId,
+          forceRefresh: needsForceExport,
+        }),
+      })
+      if (!res.ok) {
+        const body = await res.json() as { error?: string }
+        throw new Error(body.error ?? 'Export failed')
+      }
+      const { markdown } = await res.json() as { markdown: string; fromCache: boolean }
+      setExportInfo({ status: 'done', createdAt: new Date().toISOString() })
+
+      // Trigger browser download
+      const blob = new Blob([markdown], { type: 'text/markdown' })
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement('a')
+      a.href     = url
+      a.download = `ticket-${ticketData.ticket.kayakoTicketId}.md`
+      a.click()
+      URL.revokeObjectURL(url)
+
+      // Refresh runs log so Download entry appears
+      const runsRes = await fetch(`/api/bu-tickets/${ticketId}`)
+      if (runsRes.ok) {
+        const fresh = await runsRes.json() as { analysisRuns?: AnalysisRunRow[] }
+        if (fresh.analysisRuns) setAnalysisRuns(fresh.analysisRuns)
+      }
+    } catch (err: unknown) {
+      setExportError(err instanceof Error ? err.message : 'Export failed')
+    } finally {
+      setExporting(false)
+      setExportPhase('')
     }
   }
 
@@ -174,6 +244,34 @@ export default function BuTicketDetailPage() {
         onRefresh={refreshTicket}
         refreshing={refreshing}
       />
+
+      {/* Download export button */}
+      {ticketData.ticket.postsStatus === 'done' && (
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => void downloadExport(false)}
+            disabled={exporting}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition shadow-sm"
+          >
+            {exporting ? (
+              <><span className="animate-spin inline-block">⏳</span> {exportPhase || 'Generating…'}</>
+            ) : (
+              <>⬇ Download .md</>
+            )}
+          </button>
+          {exportInfo?.status === 'done' && !exporting && (
+            <button
+              onClick={() => void downloadExport(true)}
+              className="text-xs text-slate-500 hover:text-slate-700 underline"
+            >
+              ↻ Regenerate
+            </button>
+          )}
+          {exportError && (
+            <span className="text-xs text-red-600">❌ {exportError}</span>
+          )}
+        </div>
+      )}
 
       {ticketData.ticket.postsStatus !== 'done' && ticketData.posts.length === 0 && (
         <div className="mb-4 flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">

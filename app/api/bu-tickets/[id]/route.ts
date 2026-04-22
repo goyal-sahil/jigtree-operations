@@ -26,6 +26,7 @@ export async function GET(
     include: {
       posts:    { orderBy: { postedAt: 'asc' } },
       analyses: { where: { userId: user.id } },
+      exports:  { where: { userId: user.id } },
     },
   })
 
@@ -49,6 +50,8 @@ export async function GET(
     prisma.modelPricing.findMany(),
   ])
 
+  const exportRecord = ticket.exports[0] ?? null
+
   return NextResponse.json({
     ticket:       dbTicketToRow(ticket),
     posts:        ticket.posts.map(dbPostToUnified),
@@ -62,6 +65,10 @@ export async function GET(
       errorMsg:     analysis.errorMsg,
       updatedAt:    analysis.updatedAt.toISOString(),
     } : null,
+    export: exportRecord ? {
+      status:    exportRecord.status,
+      createdAt: exportRecord.updatedAt.toISOString(),
+    } : null,
     analysisRuns: runs.map(r => {
       const pricing = r.modelUsed
         ? findPricing(r.modelUsed, r.createdAt, pricingRows)
@@ -70,6 +77,7 @@ export async function GET(
       return {
         id:            r.id,
         trigger:       r.trigger,
+        runType:       r.runType ?? 'analysis',
         modelUsed:     r.modelUsed,
         postCount:     r.postCount,
         inputTokens:   r.inputTokens,

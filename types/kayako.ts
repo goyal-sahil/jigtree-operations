@@ -157,14 +157,44 @@ export interface TicketRow {
   lastSyncedAt:      string
 }
 
+// ── Export ────────────────────────────────────────────────────────────────────
+
+export interface ExportInfo {
+  status:    string   // "pending" | "running" | "done" | "error"
+  createdAt: string   // ISO timestamp of last export attempt
+}
+
+// ── Analysis run row (shared between AnalysisHistory component and API responses) ─
+
+export interface AnalysisRunRow {
+  id:            string
+  trigger:       string
+  runType:       string | null
+  modelUsed:     string | null
+  postCount:     number | null
+  inputTokens:   number | null
+  outputTokens:  number | null
+  durationMs:    number | null
+  status:        string
+  errorMsg:      string | null
+  createdAt:     string
+  inputCostUsd:  number | null
+  outputCostUsd: number | null
+  totalCostUsd:  number | null
+  isOrphaned?:   boolean
+}
+
 // ── Ticket API response (returned by /api/ticket and /api/bu-tickets/[id]) ─
 
 export interface TicketResponse {
-  ticket:       TicketRow
-  posts:        UnifiedPost[]
-  fromCache:    boolean
-  lastSyncedAt: string
-  warning?:     string
+  ticket:          TicketRow
+  posts:           UnifiedPost[]
+  fromCache:       boolean
+  lastSyncedAt:    string
+  warning?:        string
+  cachedAnalysis?: AnalysisResult | null
+  export?:         ExportInfo | null
+  analysisRuns?:   AnalysisRunRow[]
 }
 
 /** @deprecated Use TicketRow instead */

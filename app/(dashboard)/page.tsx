@@ -16,7 +16,9 @@ export default async function DashboardPage() {
   // First login — no credentials saved yet
   if (!settings?.kayakoUrl) redirect('/settings')
 
+  const admins  = (process.env.ADMIN_EMAILS ?? '').split(',').map(e => e.trim().toLowerCase())
+  const isAdmin = admins.includes(user.email?.toLowerCase() ?? '')
   const userName = user.email?.split('@')[0] ?? ''
 
-  return <HubPage userName={userName} />
+  return <HubPage userName={userName} isAdmin={isAdmin} />
 }
