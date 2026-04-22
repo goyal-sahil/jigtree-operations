@@ -37,7 +37,7 @@ function toRow(p: FilterPreset): FilterPresetRow {
 export async function fetchPresetsForUser(userId: string): Promise<FilterPresetRow[]> {
   const presets = await prisma.filterPreset.findMany({
     where: {
-      module: 'bu-tickets',
+      module: 'all-tickets',
       OR: [
         { userId },
         { visibility: 'SHARED' },
@@ -48,57 +48,57 @@ export async function fetchPresetsForUser(userId: string): Promise<FilterPresetR
   return presets.map(toRow)
 }
 
-export async function createBuTicketFilterPreset(
+export async function createAllTicketFilterPreset(
   name:        string,
   filtersJson: string,
   visibility:  'PERSONAL' | 'SHARED' = 'PERSONAL',
 ): Promise<FilterPresetRow> {
   const userId = await assertUser()
   const preset = await prisma.filterPreset.create({
-    data: { userId, module: 'bu-tickets', name, filtersJson, visibility },
+    data: { userId, module: 'all-tickets', name, filtersJson, visibility },
   })
-  revalidatePath('/bu-tickets')
+  revalidatePath('/all-tickets')
   return toRow(preset)
 }
 
-export async function renameBuTicketFilterPreset(id: string, name: string): Promise<void> {
+export async function renameAllTicketFilterPreset(id: string, name: string): Promise<void> {
   const userId = await assertUser()
-  await prisma.filterPreset.updateMany({ where: { id, userId }, data: { name } })
-  revalidatePath('/bu-tickets')
+  await prisma.filterPreset.updateMany({ where: { id, userId, module: 'all-tickets' }, data: { name } })
+  revalidatePath('/all-tickets')
 }
 
-export async function deleteBuTicketFilterPreset(id: string): Promise<void> {
+export async function deleteAllTicketFilterPreset(id: string): Promise<void> {
   const userId = await assertUser()
-  await prisma.filterPreset.deleteMany({ where: { id, userId } })
-  revalidatePath('/bu-tickets')
+  await prisma.filterPreset.deleteMany({ where: { id, userId, module: 'all-tickets' } })
+  revalidatePath('/all-tickets')
 }
 
-export async function setDefaultBuTicketFilterPreset(id: string): Promise<void> {
+export async function setDefaultAllTicketFilterPreset(id: string): Promise<void> {
   const userId = await assertUser()
   await prisma.$transaction([
-    prisma.filterPreset.updateMany({ where: { userId },     data: { isDefault: false } }),
-    prisma.filterPreset.updateMany({ where: { id, userId }, data: { isDefault: true } }),
+    prisma.filterPreset.updateMany({ where: { userId, module: 'all-tickets' },     data: { isDefault: false } }),
+    prisma.filterPreset.updateMany({ where: { id, userId, module: 'all-tickets' }, data: { isDefault: true } }),
   ])
-  revalidatePath('/bu-tickets')
+  revalidatePath('/all-tickets')
 }
 
-export async function clearDefaultBuTicketFilterPreset(): Promise<void> {
+export async function clearDefaultAllTicketFilterPreset(): Promise<void> {
   const userId = await assertUser()
-  await prisma.filterPreset.updateMany({ where: { userId }, data: { isDefault: false } })
-  revalidatePath('/bu-tickets')
+  await prisma.filterPreset.updateMany({ where: { userId, module: 'all-tickets' }, data: { isDefault: false } })
+  revalidatePath('/all-tickets')
 }
 
-export async function updateBuTicketFilterPresetFilters(id: string, filtersJson: string): Promise<void> {
+export async function updateAllTicketFilterPresetFilters(id: string, filtersJson: string): Promise<void> {
   const userId = await assertUser()
-  await prisma.filterPreset.updateMany({ where: { id, userId }, data: { filtersJson } })
-  revalidatePath('/bu-tickets')
+  await prisma.filterPreset.updateMany({ where: { id, userId, module: 'all-tickets' }, data: { filtersJson } })
+  revalidatePath('/all-tickets')
 }
 
-export async function toggleBuTicketFilterPresetVisibility(id: string): Promise<void> {
+export async function toggleAllTicketFilterPresetVisibility(id: string): Promise<void> {
   const userId = await assertUser()
-  const preset = await prisma.filterPreset.findFirst({ where: { id, userId } })
+  const preset = await prisma.filterPreset.findFirst({ where: { id, userId, module: 'all-tickets' } })
   if (!preset) return
   const next = preset.visibility === 'PERSONAL' ? 'SHARED' : 'PERSONAL'
   await prisma.filterPreset.update({ where: { id }, data: { visibility: next } })
-  revalidatePath('/bu-tickets')
+  revalidatePath('/all-tickets')
 }

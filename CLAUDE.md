@@ -12,6 +12,7 @@
 A multi-user Next.js web app — the **JigTree Operations Hub**. Features:
 - **Ticket Analyser** — load any Kayako ticket, AI analysis, timeline, post notes
 - **BU/PS Tickets** — table view of Kayako view #64, cached in DB with full post history and per-ticket detail page
+- **All Tickets** — table view of Kayako view #242 (all open tickets across all teams), same filter/sort/preset pattern as BU/PS
 
 Live at **https://jigtree-operations.vercel.app** | GitHub: `goyal-sahil/jigtree-operations`
 
@@ -21,17 +22,22 @@ The Streamlit tool at `C:\Users\sahil\CoWork\Central Kayako Tickets\` is kept as
 
 ## Status
 
-**v1.0.0 live. Phases 1–15 complete + post-launch fixes. Phase 16 planned.**
+**v1.0.0 live. Phases 1–17.1 complete + Phase 16 (All Tickets) complete. Phase 16 Notion Portfolio and Phase 17.2–17.3 planned.**
 - Ticket Analyser fully working (DB-first, Refresh button, Force re-run analysis)
-- BU/PS Tickets table: URL-driven filter/sort/pagination, server-side queries, filter presets (personal + shared + update + visibility toggle), NProgress loading bar, admin delete; filter panel (search always-visible + debounced, scrollable checkbox groups, All/None per group); BUTicketsTable has column visibility dropdown + CSV export (all filtered rows)
+- BU/PS Tickets table: URL-driven filter/sort/pagination, server-side queries, filter presets (personal + shared + update + visibility toggle), NProgress loading bar, admin delete; filter panel (search always-visible + debounced, scrollable checkbox groups, All/None per group, "Options" box with Escalated Only + Open Only); BUTicketsTable has column visibility dropdown + CSV export (all filtered rows)
 - BU/PS Ticket detail page: shared TicketCard / ConversationThread / Timeline / AddNoteForm / AIAnalysis components
+- **All Tickets page** (`/all-tickets`): identical filter pattern to BU/PS, backed by Kayako view #242; `AllTicketsToolbar`, `AllTicketsFilters`, `AllTicketsTable` components; `GET /api/all-tickets`, `POST /api/all-tickets/sync`, `POST /api/all-tickets/sync-posts`, `GET /api/all-tickets/export` routes; separate `lib/all-tickets-list-filters.ts` and `lib/all-tickets-list-query.ts`; `all-ticket-filter-presets.actions.ts` Server Actions
+- **Product Analytics**: `TicketProductAnalytics` collapsible section on both BU/PS and All Tickets pages — pill bar of open ticket counts per product (excl. Closed/Completed), clickable to auto-apply product filter + `openOnly=true`; collapsed state persisted in `localStorage`
+- **`openOnly` filter**: boolean on both `BuTicketsListFilters` and `AllTicketsListFilters` — excludes Closed/Completed tickets from query results; toggled via "Open only" checkbox in Options box
 - Unified DB schema (`tickets`, `ticket_posts`, `ticket_analyses`, `ticket_exports`) — no separate BU/PS tables
 - Token tracking (`inputTokens` / `outputTokens` stored in `ticket_analyses` and `analysis_runs`)
 - **Ticket Markdown Export**: "⬇ Download .md" on both Ticket Analyser and BU/PS detail pages; programmatic markdown generation with Claude-written Overview section; cached per user per ticket in `ticket_exports` table
 - **API Usage History**: `analysis_runs` table now tracks both analysis and download runs (`runType` field); `AnalysisHistory` component shows in both Ticket Analyser and BU/PS pages
-- `lib/kayako/ticketService.ts` — single fetch+persist service used by both Ticket Analyser and BU/PS refresh
-- RLS policies applied in Supabase (all tables, including `filter_presets` added in Phase 15)
-- **Admin section** (Phase 17.1): `/admin` page with `AdminPresetsTable.tsx` — all presets grouped by user, admin can delete any; admin nav item + Hub tile (shown only to emails in `ADMIN_EMAILS`)
+- `lib/kayako/ticketService.ts` — single fetch+persist service used by both Ticket Analyser and BU/PS/All Tickets refresh
+- RLS policies applied in Supabase (all tables, including `filter_presets`)
+- **Admin section** (Phase 17.1): `/admin` page with `AdminPresetsTable.tsx` — all presets grouped by user with "Page" column (BU/PS vs All Tickets), admin can delete any; admin nav item + Hub tile (shown only to emails in `ADMIN_EMAILS`); `BatchSyncStatus` component on admin page shows recent batch run history
+- **`module` field on `FilterPreset`**: scopes presets per page — `"bu-tickets"` or `"all-tickets"`. Managed via separate `*-filter-presets.actions.ts` server action files.
+- **`BatchRun` model**: logs every batch sync job (`all-tickets-sync`, `all-tickets-sync-posts`, `bu-tickets-sync-posts`, `bu-tickets-analyse-batch`) with processedCount, failedCount, skippedCount, durationMs, status
 - **Filter model productised**: `docs/filter-model.md` + `.claude/commands/filter-model.md` skill + `Spec/Filter-Sorting/` templates updated to finalized pattern (NProgress, router.push, draft sync, update preset, visibility, CSV export)
 - `CHANGELOG.md` introduced at v1.0.0
 
@@ -111,6 +117,7 @@ npm run dev            # → http://localhost:3000
 - **Timeouts**: 15 s per request via `AbortSignal.timeout(15_000)`. On timeout, partial results + warning banner.
 - **Max posts**: 500 per ticket load.
 - **BU/PS sync** (view #64): `GET /api/v1/views/64/cases?limit=200` — paginated case stubs. Per-case details then fetched with `getCaseRaw` + `getCaseTags` in batches of 5. Shared statuses/priorities/field-defs are pre-fetched once for the whole sync.
+- **All Tickets sync** (view #242): `GET /api/v1/views/242/cases?limit=200` — paginated case stubs. Same enrichment pattern as BU/PS sync. Sets `team: extractTeam(tags) ?? 'Support'` for non-BU/PS tickets. Also fetches view #64 to bulk-update `isBuPs` flags in one pass after sync completes. Skips already-closed tickets in DB to save time.
 
 ---
 
@@ -165,13 +172,26 @@ Key fields:
 - `errorMsg String?`
 
 ### `filter_presets`
-Saved URL-filter presets for the BU/PS Tickets page. Unique per `(userId, name)` is not enforced — names can repeat. Cascade delete from `user_settings`.
+Saved URL-filter presets for the BU/PS Tickets and All Tickets pages. Unique per `(userId, name)` is not enforced — names can repeat. Cascade delete from `user_settings`.
 
 Key fields:
 - `name String` — display name (user-supplied)
-- `filtersJson String` — canonical serialized query string (page stripped to 1, via `buTicketsFilterSignature`)
+- `module String` — page this preset belongs to: `"bu-tickets"` or `"all-tickets"`. Default `"bu-tickets"`.
+- `filtersJson String` — canonical serialized query string (page stripped to 1, via `buTicketsFilterSignature` / `allTicketsFilterSignature`)
 - `visibility FilterPresetVisibility` — `PERSONAL` or `SHARED`
-- `isDefault Boolean` — only one default per user enforced by `setDefaultBuTicketFilterPreset` action (clears others before setting)
+- `isDefault Boolean` — only one default per user per module; enforced by `setDefault*FilterPreset` action (clears others before setting)
+
+### `batch_runs`
+Append-only log of batch sync jobs. Each run of a background sync job creates one row.
+
+Key fields:
+- `jobType String` — `"all-tickets-sync"` | `"all-tickets-sync-posts"` | `"bu-tickets-sync-posts"` | `"bu-tickets-analyse-batch"`
+- `processedCount Int` — tickets successfully processed
+- `failedCount Int` — tickets that errored
+- `skippedCount Int` — tickets skipped (e.g. already closed)
+- `durationMs Int?` — wall time for the run
+- `status String` — `"running"` | `"done"` | `"error"`
+- `errorMsg String?` — top-level error if the whole run failed
 
 ---
 
@@ -245,12 +265,16 @@ Single shared service used by both Ticket Analyser and BU/PS refresh. Key export
 | `GET /api/credentials` | GET | Returns `{ hasKayako, hasAnthropic }` booleans — used by UI banners |
 | `GET /api/bu-tickets` | GET | List all BU/PS tickets from DB (legacy — BU/PS page now fetches server-side via `fetchBuTicketsPage`) |
 | `GET /api/bu-tickets/export` | GET | All filtered rows for CSV export (no pagination); called by BUTicketsTable `exportToCsv()` |
-| `DELETE /api/bu-tickets` | DELETE | Admin-only: delete by IDs or all (still used by BUTicketsTable + BUTicketsToolbar) |
+| `DELETE /api/bu-tickets` | DELETE | Admin-only: delete by IDs or all (also used by AllTicketsToolbar) |
 | `POST /api/bu-tickets/sync` | POST | Full sync from Kayako view #64 (batched, upserts tickets) |
 | `POST /api/bu-tickets/sync-posts` | POST | Background: fetch posts for 10 BU/PS tickets per run |
 | `POST /api/bu-tickets/analyse-batch` | POST | Background: run AI analysis on 5 BU/PS tickets per run |
 | `GET /api/bu-tickets/[id]` | GET | Single ticket + posts + cached analysis + `analysisRuns[]` (with cost fields + runType) + `export?` from DB |
 | `POST /api/bu-tickets/[id]/refresh` | POST | Re-fetch ticket from Kayako, persist, return `TicketResponse` |
+| `GET /api/all-tickets` | GET | List all tickets from DB where `isBuPs=false` (server-side paging via `fetchAllTicketsPage`) |
+| `GET /api/all-tickets/export` | GET | All filtered All Tickets rows for CSV export (no pagination) |
+| `POST /api/all-tickets/sync` | POST | Full sync from Kayako view #242; also updates `isBuPs` flags via view #64; skips already-closed tickets |
+| `POST /api/all-tickets/sync-posts` | POST | Background: fetch posts for 10 non-BU/PS tickets per run |
 
 ---
 
@@ -270,27 +294,56 @@ Single shared service used by both Ticket Analyser and BU/PS refresh. Key export
 |---|---|
 | `lib/bu-tickets-list-filters.ts` | Pure functions: parse/serialize URL params, build sort hrefs, count active filters, preset signature |
 | `lib/bu-tickets-list-query.ts` | Server-only: `buildBuTicketsWhere`, `orderByBuTickets`, `fetchBuTicketsPage`, `fetchBuTicketsFilterOptions` |
-| `app/actions/bu-ticket-filter-presets.actions.ts` | Server Actions: CRUD for `filter_presets` table + `fetchPresetsForUser` |
+| `app/actions/bu-ticket-filter-presets.actions.ts` | Server Actions: CRUD for `filter_presets` table (module=`"bu-tickets"`) + `fetchPresetsForUser` |
 
-### Component roles (Phase 15)
+### Component roles (Phase 15 / Phase 16)
 
 | Component | Role |
 |---|---|
 | `BUTicketsToolbar` | Client. Sync Now (POST /api/bu-tickets/sync), Delete All (DELETE /api/bu-tickets), last-synced display. Calls `router.refresh()` after mutations. |
-| `BUTicketsFilters` | Client. Search bar always-visible + debounced 350 ms (live URL update). Collapsible filter panel: scrollable checkbox groups (`max-h-36`), "All · None" per group, draft state → Apply → `router.push`. Preset pills, Save preset dialog, Manage presets. Draft syncs via `useEffect([paramsSig])` — **no `key` remount**. |
+| `BUTicketsFilters` | Client. Search bar always-visible + debounced 350 ms (live URL update). Collapsible filter panel: scrollable checkbox groups (`max-h-36`), "All · None" per group, draft state → Apply → `router.push`. "Options" box contains "Escalated only" + "Open only" checkboxes. Preset pills, Save preset dialog, Manage presets. Draft syncs via `useEffect([paramsSig])` — **no `key` remount**. |
 | `BUTicketsTable` | Client. URL sort headers (`<Link href={buTicketsSortHref(...)}>`) + pagination footer (`<Link href={buTicketsPageHref(...)}>`) + checkbox selection + delete selected (DELETE /api/bu-tickets, then `router.refresh()`). Uses `useSearchParams()` to build sort/page hrefs. |
+| `TicketProductAnalytics` | Client. Collapsible pill bar showing open ticket counts per product (excl. Closed/Completed). Clicking a pill sets `product=X&openOnly=true` in the URL. Collapsed state persisted in `localStorage` via `storageKey` prop. |
+| `AllTicketsToolbar` | Client. Mirror of `BUTicketsToolbar` for All Tickets page. Sync Now (POST /api/all-tickets/sync), Delete All (DELETE /api/bu-tickets, admin only), last-synced display. |
+| `AllTicketsFilters` | Client. Mirror of `BUTicketsFilters` for All Tickets. Uses `lib/all-tickets-list-filters.ts` + `all-ticket-filter-presets.actions.ts`. |
+| `AllTicketsTable` | Client. Mirror of `BUTicketsTable` for All Tickets. CSV export via GET /api/all-tickets/export. |
+| `BatchSyncStatus` | Client. Used on admin page. Shows pending count, "Run now" button, and last N run rows from `batch_runs` table. |
 
 ### Filter preset notes
-- `filtersJson` is the canonical QS (page stripped to 1) produced by `buTicketsFilterSignature(filters)`
+- `filtersJson` is the canonical QS (page stripped to 1) produced by `buTicketsFilterSignature(filters)` or `allTicketsFilterSignature(filters)`
 - A preset "matches" the current view when `preset.filtersJson === currentQS`
-- Only one default per user — `setDefaultBuTicketFilterPreset` clears others in a `$transaction`
-- `prisma.filterPreset` accessed via `prisma as any` guard in actions — safe to write before `db:push` but will fail at runtime until the schema is pushed
-- **Must run `npm run db:push` after pulling Phase 15** to create the `filter_presets` table
+- Only one default per user per module — `setDefault*FilterPreset` clears others in a `$transaction`
+- `module` field on `FilterPreset` scopes presets: `"bu-tickets"` or `"all-tickets"`. Admin presets table shows a "Page" column.
+- **Must run `npm run db:push` after schema changes** to pick up new fields
 
 ### Tests (Phase 15)
 - `__tests__/lib/bu-tickets-list-filters.test.ts` — 37 tests covering all pure filter functions
 - `__tests__/lib/bu-tickets-list-query.test.ts` — 16 tests covering `buildBuTicketsWhere` and `orderByBuTickets`
 - Run: `npm test` (vitest run)
+
+---
+
+## Phase 16 (All Tickets) — Architecture
+
+`app/(dashboard)/all-tickets/page.tsx` is an **async Server Component** mirroring the BU/PS pattern. It:
+1. Parses `searchParams` via `parseAllTicketsSearchParams`
+2. Fetches page + filter options + presets + lastSyncedAt + product analytics in `Promise.all`
+3. Renders `TicketProductAnalytics` + `AllTicketsToolbar` + `AllTicketsFilters` + `AllTicketsTable`
+
+### All Tickets sync specifics
+- Pulls view #242 (all support tickets, not just BU/PS)
+- Sets `team: extractTeam(tags) ?? 'Support'` — non-BU/PS tickets get `"Support"` as team
+- Skips re-syncing tickets already in DB with a `"closed"` status (performance optimisation)
+- After sync, fetches view #64 stubs and bulk-sets `isBuPs = true` on matching tickets
+- `sync-posts` route targets `isBuPs=false` tickets that still need posts
+
+### Key library files (All Tickets)
+
+| File | Purpose |
+|---|---|
+| `lib/all-tickets-list-filters.ts` | Pure functions: parse/serialize, sort/page hrefs, filter signature, `openOnly` support |
+| `lib/all-tickets-list-query.ts` | Server-only: `buildAllTicketsWhere`, `fetchAllTicketsPage`, `fetchAllTicketsForExport`, `fetchAllTicketsFilterOptions` |
+| `app/actions/all-ticket-filter-presets.actions.ts` | Server Actions: CRUD for `filter_presets` (module=`"all-tickets"`) |
 
 ---
 
@@ -312,6 +365,10 @@ Single shared service used by both Ticket Analyser and BU/PS refresh. Key export
 - **`mapTicket` in sync/route.ts** sets `requesterKayakoId: caseData.requester?.id ?? null` — needed for `ConversationThread`/`Timeline` to colour-code customer posts. Must be kept in sync with `fetchAndPersistTicket` in `ticketService.ts`.
 - **Dual-pull architecture** — TA and BU/PS detail Refresh use `fetchAndPersistTicket` (via `ticketService.ts`). BU/PS bulk Sync has its own `mapTicket`/`resolveCustomFields`/`extractTeam` in `sync/route.ts` (intentionally separate — pre-fetches shared data once for all tickets, necessary for performance). **Do not merge or refactor without Sahil's sign-off**. If field extraction logic is changed in one path, the equivalent change must be made in the other — flag this to Sahil before touching either.
 - **`TicketResponse.cachedAnalysis`** — `/api/ticket` now includes `cachedAnalysis?: AnalysisResult | null` in both the DB-first cache hit and live fetch responses. `TicketAnalyser.doFetch()` checks this field and auto-calls `setAnalysis(data.cachedAnalysis)` so the AI tab pre-populates on load for tickets that have been previously analysed.
+- **All Tickets sync team assignment**: `extractTeam(tags) ?? 'Support'` — non-BU/PS tickets get team `"Support"` (not `null`). This differs from BU/PS sync which allows null. The All Tickets filter layer must account for this when filtering by team.
+- **`openOnly` filter**: in both `BuTicketsListFilters` and `AllTicketsListFilters`. Adds a Prisma `WHERE status NOT IN ['Closed', 'Completed']` clause. Toggled from the "Options" box in the filter panel (previously called "Escalated").
+- **`TicketProductAnalytics`**: uses `storageKey` prop (e.g. `'analytics-open-bu-tickets'`, `'analytics-open-all-tickets'`) to isolate collapsed state per page in `localStorage`. Queries product counts as a separate server-side computation passed to the component as a `products` prop.
+- **`BatchRun` model**: added in Phase 16. Run `npm run db:push` to create the `batch_runs` table. `BatchSyncStatus` component on admin page reads recent runs from this table.
 
 ---
 
@@ -355,7 +412,7 @@ All docs are in `docs/`. A project-level `CHANGELOG.md` is maintained in the roo
 | `docs/ai-analysis.md` | Model selection, prompt, output sections, caching, token tracking, API shapes |
 | `docs/api-routes.md` | All routes: request/response shapes, steps, error codes |
 | `docs/components.md` | Component tree, props, behaviours, utility functions |
-| `docs/filter-model.md` | URL-driven filter pattern (Phase 15) — architecture, file roles, data contracts, replication guide |
+| `docs/filter-model.md` | URL-driven filter pattern (Phase 15/16) — architecture, file roles, data contracts, replication guide |
 | `docs/NextActions.md` | Prioritised next actions — what Claude can do vs what Sahil must provide |
 
 ---

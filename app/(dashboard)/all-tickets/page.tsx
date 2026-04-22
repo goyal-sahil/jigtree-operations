@@ -2,12 +2,12 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { prisma } from '@/lib/prisma'
 import CredentialsBanner from '@/components/CredentialsBanner'
-import BUTicketsToolbar from '@/components/BUTicketsToolbar'
-import BUTicketsFilters from '@/components/BUTicketsFilters'
-import BUTicketsTable from '@/components/BUTicketsTable'
-import { parseBuTicketsSearchParams, buTicketsFilterSignature } from '@/lib/bu-tickets-list-filters'
-import { fetchBuTicketsPage, fetchBuTicketsFilterOptions, fetchBuTicketsProductAnalytics } from '@/lib/bu-tickets-list-query'
-import { fetchPresetsForUser } from '@/app/actions/bu-ticket-filter-presets.actions'
+import AllTicketsToolbar from '@/components/AllTicketsToolbar'
+import AllTicketsFilters from '@/components/AllTicketsFilters'
+import AllTicketsTable from '@/components/AllTicketsTable'
+import { parseAllTicketsSearchParams, allTicketsFilterSignature } from '@/lib/all-tickets-list-filters'
+import { fetchAllTicketsPage, fetchAllTicketsFilterOptions, fetchAllTicketsProductAnalytics } from '@/lib/all-tickets-list-query'
+import { fetchPresetsForUser } from '@/app/actions/all-ticket-filter-presets.actions'
 import TicketProductAnalytics from '@/components/TicketProductAnalytics'
 
 function isAdminEmail(email: string | null | undefined): boolean {
@@ -16,8 +16,7 @@ function isAdminEmail(email: string | null | undefined): boolean {
   return admins.includes(email.toLowerCase())
 }
 
-// In Next.js 14 App Router, searchParams is a plain synchronous object (not a Promise).
-export default async function BuTicketsPage({
+export default async function AllTicketsPage({
   searchParams,
 }: {
   searchParams: Record<string, string | string[]>
@@ -32,57 +31,56 @@ export default async function BuTicketsPage({
   })
 
   const kayakoUrl = settings?.kayakoUrl ?? ''
-  const filters   = parseBuTicketsSearchParams(searchParams)
+  const filters   = parseAllTicketsSearchParams(searchParams)
   const isAdmin   = isAdminEmail(user.email)
 
-  // Redirect to default preset when landing with no filter params
   const hasParams = Object.keys(searchParams).length > 0
 
   const [pageResult, filterOptions, presets, maxSyncRow, productAnalytics] = await Promise.all([
-    fetchBuTicketsPage(filters, user.id, kayakoUrl),
-    fetchBuTicketsFilterOptions(user.id, kayakoUrl),
+    fetchAllTicketsPage(filters, user.id, kayakoUrl),
+    fetchAllTicketsFilterOptions(user.id, kayakoUrl),
     fetchPresetsForUser(user.id),
     prisma.ticket.aggregate({
-      where: { isBuPs: true, kayakoUrl },
+      where: { kayakoUrl },
       _max:  { lastSyncedAt: true },
     }),
-    fetchBuTicketsProductAnalytics(kayakoUrl),
+    fetchAllTicketsProductAnalytics(kayakoUrl),
   ])
 
   // Redirect to default preset if user lands with no QS
   if (!hasParams) {
     const defaultPreset = presets.find(p => p.isDefault && p.userId === user.id)
     if (defaultPreset) {
-      redirect(`/bu-tickets?${defaultPreset.filtersJson}`)
+      redirect(`/all-tickets?${defaultPreset.filtersJson}`)
     }
   }
 
   const globalLastSyncedAt = maxSyncRow._max.lastSyncedAt?.toISOString() ?? null
   const missingKayako    = !settings?.kayakoUrl || !settings?.kayakoEmail || !settings?.kayakoPasswordEnc
   const missingAnthropic = !settings?.anthropicKeyEnc
-  const currentQS        = buTicketsFilterSignature(filters)
+  const currentQS        = allTicketsFilterSignature(filters)
 
   return (
     <div className="px-6 py-6">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-slate-900">BU/PS Tickets</h1>
-        <p className="text-slate-500 text-sm mt-1">JigTree BU &amp; PS tickets from Kayako view #64</p>
+        <h1 className="text-2xl font-bold text-slate-900">All Tickets</h1>
+        <p className="text-slate-500 text-sm mt-1">All support tickets from Kayako view #242</p>
       </div>
 
       <CredentialsBanner missingKayako={missingKayako} missingAnthropic={missingAnthropic} />
 
       <TicketProductAnalytics
         products={productAnalytics}
-        storageKey="analytics-open-bu-tickets"
+        storageKey="analytics-open-all-tickets"
       />
 
-      <BUTicketsToolbar
+      <AllTicketsToolbar
         lastSyncedAt={globalLastSyncedAt}
         isAdmin={isAdmin}
         totalCount={pageResult.unfilteredTotal}
       />
 
-      <BUTicketsFilters
+      <AllTicketsFilters
         filters={filters}
         options={filterOptions}
         currentQS={currentQS}
@@ -90,7 +88,7 @@ export default async function BuTicketsPage({
         userId={user.id}
       />
 
-      <BUTicketsTable
+      <AllTicketsTable
         tickets={pageResult.tickets}
         total={pageResult.total}
         filters={filters}

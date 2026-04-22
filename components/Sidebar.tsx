@@ -20,14 +20,17 @@ export default function Sidebar({ userEmail, isAdmin }: SidebarProps) {
   const router   = useRouter()
   const supabase = createClient()
 
-  const [collapsed,          setCollapsed]          = useState(false)
-  const [supportTicketsOpen, setSupportTicketsOpen] = useState(true)
+  const [collapsed,           setCollapsed]           = useState(false)
+  const [supportTicketsOpen,  setSupportTicketsOpen]  = useState(true)
+  const [accountMgmtOpen,     setAccountMgmtOpen]     = useState(true)
 
   useEffect(() => {
     const stored = localStorage.getItem('sidebar-collapsed')
     if (stored !== null) setCollapsed(stored === 'true')
     const sectionStored = localStorage.getItem('sidebar-support-tickets-open')
     if (sectionStored !== null) setSupportTicketsOpen(sectionStored !== 'false')
+    const acctStored = localStorage.getItem('sidebar-account-mgmt-open')
+    if (acctStored !== null) setAccountMgmtOpen(acctStored !== 'false')
   }, [])
 
   function toggleCollapse() {
@@ -40,6 +43,13 @@ export default function Sidebar({ userEmail, isAdmin }: SidebarProps) {
   function toggleSupportTickets() {
     setSupportTicketsOpen(prev => {
       localStorage.setItem('sidebar-support-tickets-open', String(!prev))
+      return !prev
+    })
+  }
+
+  function toggleAccountMgmt() {
+    setAccountMgmtOpen(prev => {
+      localStorage.setItem('sidebar-account-mgmt-open', String(!prev))
       return !prev
     })
   }
@@ -83,8 +93,9 @@ export default function Sidebar({ userEmail, isAdmin }: SidebarProps) {
         {collapsed ? (
           // Icon-only: show items directly without section header
           <>
-            <NavLink href="/analyser"   label="Ticket Analyser" icon={SearchIcon} active={isActive('/analyser')}   collapsed={collapsed} />
-            <NavLink href="/bu-tickets" label="BU/PS Tickets"   icon={TableIcon}  active={isActive('/bu-tickets')} collapsed={collapsed} />
+            <NavLink href="/analyser"    label="Ticket Analyser" icon={SearchIcon} active={isActive('/analyser')}    collapsed={collapsed} />
+            <NavLink href="/all-tickets" label="All Tickets"     icon={ListIcon}   active={isActive('/all-tickets')} collapsed={collapsed} />
+            <NavLink href="/bu-tickets"  label="BU/PS Tickets"   icon={TableIcon}  active={isActive('/bu-tickets')}  collapsed={collapsed} />
           </>
         ) : (
           <div className="mt-2">
@@ -99,8 +110,29 @@ export default function Sidebar({ userEmail, isAdmin }: SidebarProps) {
 
             {supportTicketsOpen && (
               <div className="flex flex-col gap-0.5 pl-2">
-                <NavLink href="/analyser"   label="Ticket Analyser" icon={SearchIcon} active={isActive('/analyser')}   collapsed={false} />
-                <NavLink href="/bu-tickets" label="BU/PS Tickets"   icon={TableIcon}  active={isActive('/bu-tickets')} collapsed={false} />
+                <NavLink href="/analyser"    label="Ticket Analyser" icon={SearchIcon} active={isActive('/analyser')}    collapsed={false} />
+                <NavLink href="/all-tickets" label="All Tickets"     icon={ListIcon}   active={isActive('/all-tickets')} collapsed={false} />
+                <NavLink href="/bu-tickets"  label="BU/PS Tickets"   icon={TableIcon}  active={isActive('/bu-tickets')}  collapsed={false} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Account Management section */}
+        {collapsed ? (
+          <ComingSoonNavItem icon={BriefcaseIcon} label="Portfolio" collapsed={true} />
+        ) : (
+          <div className="mt-2">
+            <button
+              onClick={toggleAccountMgmt}
+              className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider hover:text-slate-300 transition"
+            >
+              <span>Account Management</span>
+              <ChevronSmallIcon className={`w-3.5 h-3.5 transition-transform ${accountMgmtOpen ? 'rotate-90' : ''}`} />
+            </button>
+            {accountMgmtOpen && (
+              <div className="flex flex-col gap-0.5 pl-2">
+                <ComingSoonNavItem icon={BriefcaseIcon} label="Portfolio" collapsed={false} />
               </div>
             )}
           </div>
@@ -174,6 +206,34 @@ function NavLink({
   )
 }
 
+// ── Coming Soon nav item ───────────────────────────────────────────────────────
+
+function ComingSoonNavItem({
+  icon: Icon, label, collapsed,
+}: {
+  icon:      React.ComponentType<{ className?: string }>
+  label:     string
+  collapsed: boolean
+}) {
+  return (
+    <div
+      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-slate-600 cursor-default
+        ${collapsed ? 'justify-center' : ''}`}
+      title={collapsed ? `${label} — Coming Soon` : undefined}
+    >
+      <Icon className="w-5 h-5 shrink-0 opacity-50" />
+      {!collapsed && (
+        <>
+          <span className="text-sm font-medium opacity-50">{label}</span>
+          <span className="ml-auto text-[10px] font-semibold bg-slate-700 text-slate-400 px-1.5 py-0.5 rounded-full leading-none">
+            Soon
+          </span>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Icons ──────────────────────────────────────────────────────────────────────
 
 function HomeIcon({ className }: { className?: string }) {
@@ -200,6 +260,14 @@ function TableIcon({ className }: { className?: string }) {
   )
 }
 
+function ListIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+    </svg>
+  )
+}
+
 function GearIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -221,6 +289,15 @@ function ChevronIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+    </svg>
+  )
+}
+
+function BriefcaseIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2" />
     </svg>
   )
 }

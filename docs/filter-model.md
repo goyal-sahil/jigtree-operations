@@ -1,8 +1,8 @@
 # URL-Driven Filter Model
 
-_Introduced in Phase 15. Reference implementation: BU/PS Tickets (`/bu-tickets`)._
+_Introduced in Phase 15. Reference implementation: BU/PS Tickets (`/bu-tickets`). Replicated in Phase 16 for All Tickets (`/all-tickets`)._
 
-This pattern is used for any page that needs server-side filtered/sorted/paginated data with a shareable URL state. It is designed to be replicated for future pages in this app (e.g. open tickets, portfolio view).
+This pattern is used for any page that needs server-side filtered/sorted/paginated data with a shareable URL state. It has been replicated twice in this app (BU/PS Tickets and All Tickets).
 
 For project-agnostic templates that can be dropped into other Next.js + Prisma apps, see [`Spec/Filter-Sorting/`](../Spec/Filter-Sorting/).
 
@@ -185,8 +185,45 @@ Run: `npm test`
 
 ---
 
+## All Tickets (`/all-tickets`) — Existing Replica
+
+Phase 16 replicated this pattern for All Tickets. The parallel files are:
+
+| BU/PS | All Tickets |
+|---|---|
+| `lib/bu-tickets-list-filters.ts` | `lib/all-tickets-list-filters.ts` |
+| `lib/bu-tickets-list-query.ts` | `lib/all-tickets-list-query.ts` |
+| `app/actions/bu-ticket-filter-presets.actions.ts` | `app/actions/all-ticket-filter-presets.actions.ts` |
+| `components/BUTicketsFilters.tsx` | `components/AllTicketsFilters.tsx` |
+| `components/BUTicketsTable.tsx` | `components/AllTicketsTable.tsx` |
+| `components/BUTicketsToolbar.tsx` | `components/AllTicketsToolbar.tsx` |
+| `GET /api/bu-tickets/export` | `GET /api/all-tickets/export` |
+
+**Key differences from BU/PS:**
+- `module` on `FilterPreset` is `"all-tickets"` (not `"bu-tickets"`)
+- Preset actions are in `all-ticket-filter-presets.actions.ts` (separate file, separate `revalidatePath`)
+- WHERE clause uses `isBuPs = false` instead of `isBuPs = true` to scope data to the All Tickets view
+- `team` values include `"Support"` in addition to `"PS"` and `"BU"` (non-BU/PS tickets get `"Support"` from sync)
+- `openOnly` filter is present in both pages
+
+---
+
+## `openOnly` Filter
+
+Both `BuTicketsListFilters` and `AllTicketsListFilters` include an `openOnly: boolean` field. When `true`, the WHERE builder adds:
+
+```typescript
+{ status: { notIn: ['Closed', 'Completed'] } }
+```
+
+`openOnly` is toggled via the "Open only" checkbox in the "Options" collapsible box in the filter panel (previously labelled "Escalated").
+
+`TicketProductAnalytics` always sets `openOnly=true` when clicking a product pill — this is intentional since the pill counts already exclude closed/completed.
+
+---
+
 ## Replicating for a New Page in This App
 
-Use the `/filter-model` Claude skill (`.claude/commands/filter-model.md`) — it documents all required exports, component contracts, NProgress setup, and CSV export pattern with exact code snippets.
+Use the `/filter-model` Claude skill (`.claude/commands/filter-model.md`) — it documents all required exports, component contracts, NProgress setup, and CSV export pattern with exact code snippets. Reference the All Tickets implementation as the second worked example.
 
 For a **new project** (outside this app), use the generic templates in [`Spec/Filter-Sorting/templates/`](../Spec/Filter-Sorting/templates/).

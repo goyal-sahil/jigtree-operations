@@ -192,6 +192,45 @@ Append-only log of every Anthropic API call — both analysis runs and markdown 
 
 ---
 
+### `FilterPreset` → table `filter_presets`
+
+Saved URL-filter presets for the BU/PS Tickets and All Tickets pages.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `userId` | UUID | FK → `user_settings.userId` (cascade delete) |
+| `module` | String | `"bu-tickets"` or `"all-tickets"` — scopes presets per page. Default `"bu-tickets"`. |
+| `name` | String | Display name (user-supplied) |
+| `filtersJson` | String | Canonical serialized QS (page stripped to 1) |
+| `visibility` | Enum | `PERSONAL` or `SHARED` |
+| `isDefault` | Boolean | Only one default per user per module (enforced by server action) |
+| `createdAt` | DateTime | Auto-set on create |
+| `updatedAt` | DateTime | Auto-updated |
+
+---
+
+### `BatchRun` → table `batch_runs`
+
+Append-only log of background batch sync jobs. One row per job run.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `jobType` | String | `"all-tickets-sync"` / `"all-tickets-sync-posts"` / `"bu-tickets-sync-posts"` / `"bu-tickets-analyse-batch"` |
+| `processedCount` | Int | Tickets successfully processed |
+| `failedCount` | Int | Tickets that errored |
+| `skippedCount` | Int | Tickets skipped (e.g. already closed) |
+| `durationMs` | Int? | Wall time for the run |
+| `status` | String | `"running"` / `"done"` / `"error"` |
+| `errorMsg` | String? | Top-level error if the whole run failed |
+| `createdAt` | DateTime | Auto-set on create |
+| `updatedAt` | DateTime | Auto-updated |
+
+Used by `BatchSyncStatus` component on the admin page to show recent run history per job type.
+
+---
+
 ### `TicketExport` → table `ticket_exports`
 
 Cached markdown export per user per ticket. One record per user per ticket (upserted on each generation).

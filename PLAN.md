@@ -1,6 +1,6 @@
 # JigTree Operations Hub — Vercel/Supabase App Plan
 
-## Status: v1.0.0 live — Phases 1–15 complete + post-launch fixes + Phase 17.1 (Admin). Phase 16 (Notion Portfolio) and Phase 17.2–17.3 planned.
+## Status: v1.0.0 live — Phases 1–17.1 complete + Phase 16 (All Tickets page). Notion Portfolio integration and Phase 17.2–17.3 planned.
 
 Full feature set working end-to-end:
 - Ticket Analyser (DB-first, Refresh, Force re-run analysis)
@@ -1327,13 +1327,37 @@ Cache key: `(user_id, ticket_id, kayako_url)`. Cache is NOT auto-invalidated whe
 
 ---
 
+## Phase 16 (All Tickets) — ✅ Complete
+
+All Tickets page now live at `/all-tickets`. Work completed:
+
+- [x] `app/(dashboard)/all-tickets/page.tsx` — async Server Component, same URL-driven pattern as BU/PS
+- [x] `lib/all-tickets-list-filters.ts` — pure filter functions (`parseAllTicketsSearchParams`, `serializeAllTicketsParams`, `allTicketsFilterSignature`, `countActiveFilters`, sort/page hrefs, `openOnly` support)
+- [x] `lib/all-tickets-list-query.ts` — server-only Prisma query layer (`buildAllTicketsWhere`, `fetchAllTicketsPage`, `fetchAllTicketsForExport`, `fetchAllTicketsFilterOptions`)
+- [x] `app/actions/all-ticket-filter-presets.actions.ts` — Server Actions for preset CRUD (module=`"all-tickets"`)
+- [x] `components/AllTicketsToolbar.tsx` — Sync Now + Delete All + last-synced
+- [x] `components/AllTicketsFilters.tsx` — Search + filter panel + preset management + Options box (Escalated + Open Only)
+- [x] `components/AllTicketsTable.tsx` — URL sort + pagination + column visibility + CSV export
+- [x] `components/TicketProductAnalytics.tsx` — collapsible open-ticket pill bar per product; shared by both BU/PS and All Tickets pages
+- [x] `components/BatchSyncStatus.tsx` — admin page batch job widget (trigger + recent run log)
+- [x] `app/api/all-tickets/sync/route.ts` — full sync from view #242; team=`extractTeam(tags)??"Support"`; skips closed; updates isBuPs flags
+- [x] `app/api/all-tickets/sync-posts/route.ts` — background post fetch for non-BU/PS tickets
+- [x] `app/api/all-tickets/export/route.ts` — CSV export route
+- [x] `prisma/schema.prisma` — `module` field on `FilterPreset`; `BatchRun` model added
+- [x] `npm run db:push` — `filter_presets.module`, `batch_runs` table created
+- [x] `openOnly` filter on both BU/PS and All Tickets filter layers
+- [x] Admin presets table updated with "Page" column (module display)
+- [x] Hub tile added for All Tickets; Sidebar updated
+- [x] `BatchRun` logging integrated into batch job routes
+
+---
+
 ## Future Phases
 
-- [ ] **Automated BU/PS sync**: Vercel cron job (every N hours) to trigger sync without manual click
+- [ ] **Automated sync**: Vercel cron job (every N hours) to trigger All Tickets sync + post-sync without manual click
 - [ ] **Additional Hub tiles**: Other tooling tiles as needed
 - [ ] **Mobile responsiveness**: `sm:` Tailwind breakpoints on remaining layouts
-- [ ] **Investigate organization/requesterName missing for some tickets**: Some BU/PS tickets show "—" for Customer (organization) and empty requester name after sync — may need API debug to confirm whether `include=organization` expands correctly
-- [ ] **Supabase region migration — Japan → India (Mumbai)**: Current project is in `ap-northeast-1` (Tokyo). Move to `ap-south-1` (Mumbai) for lower latency. No built-in Supabase migration tool — process: create new project in Mumbai → `db:push` + seed pricing → pg_dump/restore data → update Google OAuth callback URL → update Vercel env vars (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `DATABASE_URL`, `DIRECT_URL`). Check Supabase support first — Pro plan customers can sometimes request assisted migrations.
+- [ ] **Supabase region migration — Japan → India (Mumbai)**: Current project is in `ap-northeast-1` (Tokyo). Move to `ap-south-1` (Mumbai) for lower latency. No built-in Supabase migration tool — process: create new project in Mumbai → `db:push` + seed pricing → pg_dump/restore data → update Google OAuth callback URL → update Vercel env vars.
 
 ---
 
@@ -1500,7 +1524,9 @@ The BU/PS Tickets page converts from a client-component-fetch model to a Next.js
 
 ---
 
-## Phase 16 — Notion Portfolio Integration
+## Phase 16B — Notion Portfolio Integration (Planned)
+
+_Note: Phase 16 (All Tickets) was implemented first and is now complete. This is the original "Phase 16" Notion work, renamed 16B to avoid confusion._
 
 **Source**: Notion database at `trilogy-enterprises` workspace (view ID: `28485e927d3181c89d6cdd6fd57ea07d`)
 **Goal**: Ingest portfolio company data from Notion into the app, match companies to Kayako customers, and surface ARR + portfolio context on BU/PS tickets and in AI analysis.

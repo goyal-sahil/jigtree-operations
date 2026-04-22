@@ -4,25 +4,25 @@ import { useState, useEffect, useRef, useTransition } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import NProgress from 'nprogress'
 import {
-  serializeBuTicketsParams,
+  serializeAllTicketsParams,
   countActiveFilters,
-  buTicketsFilterSignature,
-  type BuTicketsListFilters,
+  allTicketsFilterSignature,
+  type AllTicketsListFilters,
   type AgeRisk,
-} from '@/lib/bu-tickets-list-filters'
-import type { FilterOptions } from '@/lib/bu-tickets-list-query'
-import type { FilterPresetRow } from '@/app/actions/bu-ticket-filter-presets.actions'
+} from '@/lib/all-tickets-list-filters'
+import type { FilterOptions } from '@/lib/all-tickets-list-query'
+import type { FilterPresetRow } from '@/app/actions/all-ticket-filter-presets.actions'
 import {
-  createBuTicketFilterPreset,
-  deleteBuTicketFilterPreset,
-  setDefaultBuTicketFilterPreset,
-  clearDefaultBuTicketFilterPreset,
-  updateBuTicketFilterPresetFilters,
-  toggleBuTicketFilterPresetVisibility,
-} from '@/app/actions/bu-ticket-filter-presets.actions'
+  createAllTicketFilterPreset,
+  deleteAllTicketFilterPreset,
+  setDefaultAllTicketFilterPreset,
+  clearDefaultAllTicketFilterPreset,
+  updateAllTicketFilterPresetFilters,
+  toggleAllTicketFilterPresetVisibility,
+} from '@/app/actions/all-ticket-filter-presets.actions'
 
 interface Props {
-  filters:   BuTicketsListFilters
+  filters:   AllTicketsListFilters
   options:   FilterOptions
   currentQS: string
   presets:   FilterPresetRow[]
@@ -37,7 +37,7 @@ const AGE_RISK_LABELS: Record<AgeRisk, string> = {
 
 const SEARCH_DEBOUNCE_MS = 350
 
-export default function BUTicketsFilters({ filters, options, currentQS, presets, userId }: Props) {
+export default function AllTicketsFilters({ filters, options, currentQS, presets, userId }: Props) {
   const router       = useRouter()
   const searchParams = useSearchParams()
 
@@ -51,7 +51,6 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
     }
   }, [searchParams])
 
-  // Wrapper for all filter navigations — starts the progress bar immediately
   function navigate(url: string) {
     NProgress.start()
     router.push(url)
@@ -74,8 +73,8 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
   }
 
   // ── Draft state ─────────────────────────────────────────────────────────────
-  const [draft, setDraft] = useState<BuTicketsListFilters>({ ...filters })
-  const paramsSig = serializeBuTicketsParams(filters).toString()
+  const [draft, setDraft] = useState<AllTicketsListFilters>({ ...filters })
+  const paramsSig = serializeAllTicketsParams(filters).toString()
   useEffect(() => {
     setDraft({ ...filters })
     setSearchInput(filters.search ?? '')
@@ -91,7 +90,7 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
   const [saveShared, setSaveShared] = useState(false)
   const [isPending,  startTransition] = useTransition()
 
-  // ── Per-item loading state (for spinner on clicked button) ──────────────────
+  // ── Per-item loading state ──────────────────────────────────────────────────
   const [loadingId, setLoadingId] = useState<string | null>(null)
 
   // ── Preset delete confirmation ──────────────────────────────────────────────
@@ -101,12 +100,12 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
   const ownPresets     = presets.filter(p => p.userId === userId)
 
   // ── Update current preset detection ────────────────────────────────────────
-  const draftSig        = buTicketsFilterSignature(draft)
+  const draftSig        = allTicketsFilterSignature(draft)
   const activeOwnPreset = ownPresets.find(p => p.filtersJson === currentQS)
   const canUpdatePreset = !!activeOwnPreset && draftSig !== currentQS
 
   function applyDraft() {
-    navigate(`?${serializeBuTicketsParams({ ...draft, page: 1 }).toString()}`)
+    navigate(`?${serializeAllTicketsParams({ ...draft, page: 1 }).toString()}`)
   }
 
   function clearAll() {
@@ -134,7 +133,7 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
   function handleSavePreset() {
     if (!saveName.trim()) return
     startTransition(async () => {
-      await createBuTicketFilterPreset(saveName.trim(), currentQS, saveShared ? 'SHARED' : 'PERSONAL')
+      await createAllTicketFilterPreset(saveName.trim(), currentQS, saveShared ? 'SHARED' : 'PERSONAL')
       setSaveOpen(false)
       setSaveName('')
       router.refresh()
@@ -144,8 +143,8 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
   function handleSetDefault(id: string, isDefault: boolean) {
     setLoadingId(id)
     startTransition(async () => {
-      if (isDefault) await clearDefaultBuTicketFilterPreset()
-      else           await setDefaultBuTicketFilterPreset(id)
+      if (isDefault) await clearDefaultAllTicketFilterPreset()
+      else           await setDefaultAllTicketFilterPreset(id)
       router.refresh()
       setLoadingId(null)
     })
@@ -154,7 +153,7 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
   function handleDeletePreset(id: string) {
     setLoadingId(id)
     startTransition(async () => {
-      await deleteBuTicketFilterPreset(id)
+      await deleteAllTicketFilterPreset(id)
       setDeleteConfirmId(null)
       setLoadingId(null)
       router.refresh()
@@ -164,7 +163,7 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
   function handleToggleVisibility(id: string) {
     setLoadingId(id)
     startTransition(async () => {
-      await toggleBuTicketFilterPresetVisibility(id)
+      await toggleAllTicketFilterPresetVisibility(id)
       setLoadingId(null)
       router.refresh()
     })
@@ -173,7 +172,7 @@ export default function BUTicketsFilters({ filters, options, currentQS, presets,
   function handleUpdatePreset() {
     if (!activeOwnPreset) return
     startTransition(async () => {
-      await updateBuTicketFilterPresetFilters(activeOwnPreset.id, draftSig)
+      await updateAllTicketFilterPresetFilters(activeOwnPreset.id, draftSig)
       navigate(`?${draftSig}`)
     })
   }

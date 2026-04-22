@@ -28,6 +28,7 @@ app/(dashboard)/analyser/page.tsx  [server]
 
 app/(dashboard)/bu-tickets/page.tsx  [server — async Server Component]
   CredentialsBanner
+  TicketProductAnalytics       [client — product open-ticket pill bar]
   BUTicketsToolbar             [client — sync, delete-all, last-synced]
   BUTicketsFilters             [client — search + collapsible filter panel + presets]
   BUTicketsTable               [client — URL sort headers + pagination]
@@ -44,11 +45,19 @@ app/(dashboard)/bu-tickets/[id]/page.tsx  [client — detail page]
   AddNoteForm                  [shared with Analyser]
   AnalysisHistory              [collapsible API usage history (analysis + download runs)]
 
+app/(dashboard)/all-tickets/page.tsx  [server — async Server Component]
+  CredentialsBanner
+  TicketProductAnalytics       [client — product open-ticket pill bar]
+  AllTicketsToolbar            [client — sync, delete-all, last-synced]
+  AllTicketsFilters            [client — search + collapsible filter panel + presets]
+  AllTicketsTable              [client — URL sort headers + pagination + CSV export]
+
 app/(dashboard)/settings/page.tsx  [server]
   SettingsForm                 [client — credential form]
 
 app/(dashboard)/admin/page.tsx  [server — admin-gated]
-  AdminPresetsTable            [client — all presets grouped by user]
+  AdminPresetsTable            [client — all presets grouped by user, with "Page" column]
+  BatchSyncStatus              [client — batch job trigger + recent run log (per job type)]
 ```
 
 ---
@@ -307,6 +316,89 @@ Uses `useEffect([paramsSig])` to sync checkbox draft from `filters` prop when UR
 
 ---
 
+## `TicketProductAnalytics`
+
+`components/TicketProductAnalytics.tsx` — client component. Used on both the BU/PS Tickets and All Tickets pages.
+
+**Props:**
+```typescript
+{
+  products:   ProductAnalyticsRow[]   // [{ product, count }] — open tickets per product
+  storageKey: string                  // e.g. 'analytics-open-bu-tickets' or 'analytics-open-all-tickets'
+}
+```
+
+**Renders:**
+- Collapsible section (chevron toggle). Collapsed state persisted in `localStorage` using `storageKey`.
+- Header: "Open by Product" + product count + total open count + "excl. Closed & Completed" badge.
+- Pill bar: one pill per product showing count. Clicking a pill sets `product=X&openOnly=true` in the URL via `router.push` (with NProgress). If the same product is already the only active filter, clicking again clears it.
+- "Clear product filter" link shown when any product filter is active.
+
+**Counts**: computed server-side — only tickets with status not in Closed/Completed are counted. Passed as prop from the Server Component page.
+
+---
+
+## `AllTicketsToolbar`
+
+`components/AllTicketsToolbar.tsx` — client component. Mirror of `BUTicketsToolbar` for the All Tickets page.
+
+**Props:**
+```typescript
+{
+  lastSyncedAt: string | null
+  isAdmin:      boolean
+  totalCount:   number
+}
+```
+
+**Features:**
+- **Sync Now** — `POST /api/all-tickets/sync`; shows elapsed timer; fires `sync-posts` background job after sync
+- **Delete All** — admin only; `DELETE /api/bu-tickets`; requires confirmation dialog
+- Calls `router.refresh()` after each mutation
+
+---
+
+## `AllTicketsFilters`
+
+`components/AllTicketsFilters.tsx` — client component. Mirror of `BUTicketsFilters` for the All Tickets page.
+
+Same behaviour as `BUTicketsFilters` but uses:
+- `lib/all-tickets-list-filters.ts` exports (`serializeAllTicketsParams`, `allTicketsFilterSignature`, `AllTicketsListFilters`, etc.)
+- `app/actions/all-ticket-filter-presets.actions.ts` for preset CRUD
+
+Filter panel includes the same "Options" box with "Escalated only" + "Open only" checkboxes.
+
+---
+
+## `AllTicketsTable`
+
+`components/AllTicketsTable.tsx` — client component. Mirror of `BUTicketsTable` for the All Tickets page.
+
+Same behaviour as `BUTicketsTable` but CSV export calls `GET /api/all-tickets/export`. Uses All Tickets sort/page href helpers from `lib/all-tickets-list-filters.ts`.
+
+---
+
+## `BatchSyncStatus`
+
+`components/BatchSyncStatus.tsx` — client component. Used on the admin page.
+
+**Props:**
+```typescript
+{
+  label:        string         // e.g. "All Tickets — Sync Posts"
+  endpoint:     string         // POST endpoint to trigger the job
+  pendingCount: number         // tickets awaiting processing
+  recentRuns:   RecentRun[]    // from batch_runs table
+}
+```
+
+**Renders:**
+- Header with label, pending count (amber if > 0, emerald "All up to date" if 0), and "Run now" button.
+- Inline result message after a run completes (processed / failed / skipped counts).
+- Recent runs list: coloured dot (emerald=done, red=error, blue=running), time, counts, duration, error message if any.
+
+---
+
 ## `CredentialsBanner`
 
 `components/CredentialsBanner.tsx` — client component.
@@ -350,7 +442,7 @@ Tile grid linking to the main tools. For admin users (email in `NEXT_PUBLIC_ADMI
 { presets: FilterPresetRow[] }
 ```
 
-Displays all filter presets in the system, grouped by user (email). Each row shows: preset name, visibility badge (PERSONAL/SHARED), default star, `filtersJson` (canonical QS). Admin can delete any preset via `adminDeleteFilterPreset` Server Action from `app/actions/admin.actions.ts`.
+Displays all filter presets in the system, grouped by user (email). Each row shows: preset name, **Page** column (BU/PS or All Tickets, derived from `module` field), visibility badge (PERSONAL/SHARED), default star, `filtersJson` (canonical QS). Admin can delete any preset via `adminDeleteFilterPreset` Server Action from `app/actions/admin.actions.ts`.
 
 The admin page server component checks `ADMIN_EMAILS` env var and redirects non-admins to `/`.
 

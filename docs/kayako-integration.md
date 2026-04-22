@@ -234,6 +234,20 @@ The post-fetch background job (`sync-posts`) uses **the same code path as indivi
 
 ---
 
+## All Tickets Sync Strategy
+
+The sync (`/api/all-tickets/sync`) uses the same batch approach as BU/PS sync, but targets view #242:
+
+1. **Pre-fetch shared data once** for all tickets: statuses, priorities, field definitions, SELECT option labels
+2. **Fetch all case stubs** from view #242 via `getViewCases(242)` — this is a superset of view #64
+3. **Skip already-closed tickets**: check the DB; any ticket already stored with `status` containing `"closed"` is skipped (not re-fetched). This saves significant API quota for stale closed tickets.
+4. **Per-case enrichment** (batched 5 at a time): `getCaseRaw(id)` + `getCaseTags(id)`. Also calls `getOrganizationName(orgId)` if the organization name isn't in the case response.
+5. **Team assignment**: `extractTeam(tags) ?? 'Support'` — non-BU/PS tickets get `team = "Support"` rather than `null`
+6. **Post-sync `isBuPs` update**: after upserting all tickets, bulk-set `isBuPs = false` for all tickets, then fetch view #64 stubs and bulk-set `isBuPs = true` for those IDs. This keeps `isBuPs` accurate without a separate BU/PS sync.
+7. **No post fetch** — posts fetched separately via background `all-tickets/sync-posts` job (same `fetchAndPersistTicket` code path).
+
+---
+
 ## Request Timeouts
 
 All requests use `AbortSignal.timeout(15_000)` — a Node.js 18+ built-in. No extra timeout packages needed.

@@ -6,6 +6,72 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.0] — 2026-04-22
+
+### Added
+
+**Product Analytics (both pages)**
+- `components/TicketProductAnalytics.tsx` — collapsible pill bar showing open ticket count per product (excludes Closed/Completed); clicking a pill auto-applies `product=Name&openOnly=true` filter; "Clear product filter" removes both; NProgress integrated; open/closed state persisted to localStorage per `storageKey` prop
+- `fetchBuTicketsProductAnalytics` in `lib/bu-tickets-list-query.ts`
+- `fetchAllTicketsProductAnalytics` in `lib/all-tickets-list-query.ts`
+- Added to both `app/(dashboard)/bu-tickets/page.tsx` and `app/(dashboard)/all-tickets/page.tsx`
+
+**`openOnly` filter**
+- `openOnly?: boolean` added to `BuTicketsListFilters` and `AllTicketsListFilters` — excludes tickets with Closed/Completed status from query results
+- Parse, serialize, and `countActiveFilters` updated in both filter libs
+- `buildBuTicketsWhere` and `buildAllTicketsWhere` apply `NOT { OR: CLOSED_STATUSES }` when `openOnly=true`
+- `BUTicketsFilters` and `AllTicketsFilters`: "Escalated" box renamed "Options", now contains both "Escalated only" and "Open only" checkboxes
+
+**Portfolio — Coming Soon**
+- Sidebar: new "Account Management" collapsible section (after Support Tickets, before Admin) with a non-navigable "Portfolio" item + "Soon" pill; section state persisted to localStorage
+- HubPage: new "Account Management" section with a coming-soon Portfolio tile (amber accent, `ComingSoonTile` component — non-clickable, 60% opacity, "Coming Soon" badge)
+
+### Changed
+
+- Admin presets table now shows a "Page" column: blue "BU/PS" badge or teal "All Tickets" badge, derived from `FilterPreset.module`
+- `components/AdminPresetsTable.tsx` — `PresetRow` interface extended with `module: string`
+- `app/(dashboard)/admin/page.tsx` — `module: p.module` added to rows mapping
+
+---
+
+## [1.2.0] — 2026-04-22
+
+### Added
+
+**All Tickets Page (Phase 18)**
+- `app/(dashboard)/all-tickets/page.tsx` — async Server Component; all filter/sort/page state in URL; mirrors BU/PS Tickets layout exactly
+- `lib/all-tickets-list-filters.ts` — pure filter helpers (renamed exports: `AllTicketsListFilters`, `parseAllTicketsSearchParams`, `serializeAllTicketsParams`, `allTicketsSortHref`, `allTicketsPageHref`, `allTicketsFilterSignature`)
+- `lib/all-tickets-list-query.ts` — server-only Prisma queries without `isBuPs: true` constraint: `buildAllTicketsWhere`, `orderByAllTickets`, `fetchAllTicketsPage`, `fetchAllTicketsForExport`, `fetchAllTicketsFilterOptions`
+- `app/actions/all-ticket-filter-presets.actions.ts` — full preset CRUD scoped to `module: 'all-tickets'`
+- `app/api/all-tickets/sync/route.ts` — syncs view #242 (skip existing closed tickets), resets all `isBuPs = false`, then fetches view #64 IDs to set `isBuPs = true` (no full re-sync needed)
+- `app/api/all-tickets/sync-posts/route.ts` — fetches posts for `isBuPs = false` tickets with `postsStatus != 'done'`
+- `app/api/all-tickets/export/route.ts` — all-filtered-rows CSV export endpoint
+- `components/AllTicketsFilters.tsx` — identical to BUTicketsFilters; imports from all-tickets actions/lib
+- `components/AllTicketsTable.tsx` — identical to BUTicketsTable; `Support` team badge; links to `/bu-tickets/[id]` detail page
+- `components/AllTicketsToolbar.tsx` — Sync Now (view #242 + fires sync-posts), Delete All, last-synced; reports skipped count for closed tickets
+- `components/BatchSyncStatus.tsx` — reusable admin component: pending count, trigger button, recent runs list
+
+**Schema changes (run `npm run db:push` after pulling)**
+- `FilterPreset.module String @default("bu-tickets")` — scopes presets per page; BU/PS actions updated to filter by `module: 'bu-tickets'`
+- `BatchRun` model — append-only log of batch job runs (for admin batch sync status)
+
+**Navigation**
+- Sidebar: "All Tickets" link added under Support Tickets section (between Analyser and BU/PS)
+- HubPage: "All Tickets" tile added to Support Tickets grid
+
+**Admin page batch sync**
+- Three new sections: Post Sync — All Tickets, Post Sync — BU/PS, AI Analysis — BU/PS
+- Each shows pending ticket count + manual trigger button
+
+### Changed
+
+- `components/Sidebar.tsx` — added All Tickets link + `ListIcon`
+- `components/HubPage.tsx` — added All Tickets tile + `ListIcon`
+- `app/actions/bu-ticket-filter-presets.actions.ts` — `fetchPresetsForUser` now filters by `module: 'bu-tickets'`; `createBuTicketFilterPreset` sets `module: 'bu-tickets'`
+- `app/(dashboard)/admin/page.tsx` — added Batch Sync section above Filter Presets
+
+---
+
 ## [1.1.0] — 2026-04-22
 
 ### Added

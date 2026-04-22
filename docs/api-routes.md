@@ -436,3 +436,66 @@ Re-fetch a single ticket from Kayako and persist it (and its posts) to DB. Uses 
 - `400` — invalid ticket ID or Kayako credentials not configured
 - `500` — decryption failure
 - `502` — Kayako auth or fetch failure
+
+---
+
+## `POST /api/all-tickets/sync`
+
+Full sync from Kayako view #242 (all support tickets across teams). Also updates `isBuPs` flags by fetching view #64 stub list.
+
+`maxDuration = 300` seconds.
+
+**Steps:**
+1. Pre-fetch shared data once: statuses, priorities, field definitions, SELECT option labels
+2. `client.getViewCases(242)` — paginated, returns all case stubs
+3. Load existing closed tickets from DB — skip re-syncing them (performance optimisation)
+4. For each stub (batched 5 at a time): `getCaseRaw(id)` + `getCaseTags(id)` in parallel; `getOrganizationName` if needed
+5. Map ticket: `team = extractTeam(tags) ?? 'Support'` — non-BU/PS tickets get `"Support"` as team
+6. `prisma.ticket.upsert(...)` for each case
+7. After sync: bulk-reset all `isBuPs = false`, then fetch view #64 stub IDs and set `isBuPs = true` on matching tickets
+
+**Response:**
+```json
+{
+  "ok": true,
+  "synced": 120,
+  "skipped": 30,
+  "failed": 2,
+  "total": 152,
+  "duration": 78450,
+  "firstError": null
+}
+```
+
+`skipped` = tickets already in DB with a closed status (not re-synced).
+
+**Error responses:**
+- `400` — Kayako credentials not configured
+- `500` — Prisma client stale
+- `502` — Kayako auth or view fetch failure
+
+---
+
+## `POST /api/all-tickets/sync-posts`
+
+Background job: fetch and persist posts for up to 10 **non-BU/PS** tickets per run (those with `isBuPs=false` and `postsStatus != 'done'`), ordered by `kayakoUpdatedAt` desc.
+
+**Response:**
+```json
+{ "ok": true, "processed": 10, "failed": 0, "total": 10 }
+```
+
+---
+
+## `GET /api/all-tickets/export`
+
+Return **all** filtered All Tickets rows for CSV export. Uses the same filter parameters as the All Tickets page query string, with no `skip`/`take`.
+
+Called by `AllTicketsTable.exportToCsv()`.
+
+**Query params:** same as the All Tickets page URL (search, team, status, priority, blockerType, ageRisk, product, isEscalated, openOnly, sortField, sortDir — page/pageSize ignored).
+
+**Response:**
+```json
+{ "tickets": [ ...TicketRow[] ] }
+```

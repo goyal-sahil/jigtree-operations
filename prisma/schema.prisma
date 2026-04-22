@@ -179,7 +179,7 @@ model AnalysisRun {
   @@map("analysis_runs")
 }
 
-// ── Filter presets (BU/PS Tickets URL-driven filtering) ──────────────────
+// ── Filter presets (URL-driven filtering, scoped by module) ──────────────
 
 enum FilterPresetVisibility {
   PERSONAL
@@ -189,6 +189,8 @@ enum FilterPresetVisibility {
 model FilterPreset {
   id          String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId      String                 @db.Uuid
+  /// Page module this preset belongs to — 'bu-tickets' | 'all-tickets'
+  module      String                 @default("bu-tickets")
   name        String
   /// Canonical serialized query string (page stripped to 1)
   filtersJson String
@@ -200,6 +202,25 @@ model FilterPreset {
   settings UserSettings @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@map("filter_presets")
+}
+
+// ── Batch job run log (admin batch sync status) ───────────────────────────
+
+model BatchRun {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// 'all-tickets-sync' | 'all-tickets-sync-posts' | 'bu-tickets-sync-posts' | 'bu-tickets-analyse-batch'
+  jobType        String
+  processedCount Int      @default(0)
+  failedCount    Int      @default(0)
+  skippedCount   Int      @default(0)
+  durationMs     Int?
+  /// 'running' | 'done' | 'error'
+  status         String
+  errorMsg       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("batch_runs")
 }
 
 // Cached markdown export per user per ticket.

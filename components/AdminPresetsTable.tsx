@@ -9,6 +9,7 @@ interface PresetRow {
   userId:     string
   userEmail:  string
   name:       string
+  module:     string
   visibility: 'PERSONAL' | 'SHARED'
   isDefault:  boolean
   createdAt:  string
@@ -47,6 +48,7 @@ export default function AdminPresetsTable({ presets }: { presets: PresetRow[] })
           <tr>
             <th className="text-left px-4 py-2.5 font-semibold text-slate-600 whitespace-nowrap">User</th>
             <th className="text-left px-4 py-2.5 font-semibold text-slate-600">Preset Name</th>
+            <th className="text-left px-4 py-2.5 font-semibold text-slate-600 whitespace-nowrap">Page</th>
             <th className="text-left px-4 py-2.5 font-semibold text-slate-600 whitespace-nowrap">Visibility</th>
             <th className="text-left px-4 py-2.5 font-semibold text-slate-600 whitespace-nowrap">Default</th>
             <th className="text-left px-4 py-2.5 font-semibold text-slate-600 whitespace-nowrap">Created</th>
@@ -66,6 +68,15 @@ export default function AdminPresetsTable({ presets }: { presets: PresetRow[] })
                   )}
                 </td>
                 <td className="px-4 py-2.5 font-medium text-slate-800">{p.name}</td>
+                <td className="px-4 py-2.5">
+                  <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap
+                    ${p.module === 'all-tickets'
+                      ? 'bg-teal-100 text-teal-700'
+                      : 'bg-blue-100 text-blue-700'}`}
+                  >
+                    {p.module === 'all-tickets' ? 'All Tickets' : 'BU/PS'}
+                  </span>
+                </td>
                 <td className="px-4 py-2.5">
                   <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium
                     ${p.visibility === 'SHARED'

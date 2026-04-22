@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { Prisma } from '@prisma/client'
 import { dbTicketToRow } from '@/lib/kayako/ticketService'
 import type { TicketRow } from '@/types/kayako'
-import type { BuTicketsListFilters, AgeRisk } from './bu-tickets-list-filters'
+import type { AllTicketsListFilters, AgeRisk } from './all-tickets-list-filters'
 
 export interface FilterOptions {
   statuses:     string[]
@@ -13,10 +13,10 @@ export interface FilterOptions {
   blockerTypes: string[]
 }
 
-export interface BuTicketsPage {
+export interface AllTicketsPage {
   tickets:         TicketRow[]
   total:           number   // filtered count (for pagination display)
-  unfilteredTotal: number   // all BU/PS tickets (for "Delete All N?" dialog)
+  unfilteredTotal: number   // all tickets (for "Delete All N?" dialog)
 }
 
 export interface ProductAnalyticsRow {
@@ -29,14 +29,13 @@ const CLOSED_STATUSES = [
   { status: { contains: 'completed', mode: 'insensitive' as const } },
 ]
 
-export async function fetchBuTicketsProductAnalytics(
+export async function fetchAllTicketsProductAnalytics(
   kayakoUrl: string,
 ): Promise<ProductAnalyticsRow[]> {
   const rows = await prisma.ticket.groupBy({
     by:       ['product'],
     where: {
       kayakoUrl,
-      isBuPs:  true,
       product: { not: null },
       NOT:     { OR: CLOSED_STATUSES },
     },
@@ -46,12 +45,13 @@ export async function fetchBuTicketsProductAnalytics(
   return rows.map(r => ({ product: r.product!, count: r._count.id }))
 }
 
-export function buildBuTicketsWhere(
-  filters:   BuTicketsListFilters,
+export function buildAllTicketsWhere(
+  filters:   AllTicketsListFilters,
   userId:    string,
   kayakoUrl: string,
 ): Prisma.TicketWhereInput {
-  const AND: Prisma.TicketWhereInput[] = [{ isBuPs: true, kayakoUrl }]
+  // All Tickets includes every ticket for this kayakoUrl — no isBuPs filter
+  const AND: Prisma.TicketWhereInput[] = [{ kayakoUrl }]
 
   if (filters.search) {
     const q = filters.search.trim()
@@ -95,19 +95,19 @@ export function buildBuTicketsWhere(
   return { AND }
 }
 
-export function orderByBuTickets(
-  filters: BuTicketsListFilters,
+export function orderByAllTickets(
+  filters: AllTicketsListFilters,
 ): Prisma.TicketOrderByWithRelationInput {
   return { [filters.sortField]: filters.sortDir }
 }
 
-export async function fetchBuTicketsPage(
-  filters:   BuTicketsListFilters,
+export async function fetchAllTicketsPage(
+  filters:   AllTicketsListFilters,
   userId:    string,
   kayakoUrl: string,
-): Promise<BuTicketsPage> {
-  const where   = buildBuTicketsWhere(filters, userId, kayakoUrl)
-  const orderBy = orderByBuTickets(filters)
+): Promise<AllTicketsPage> {
+  const where   = buildAllTicketsWhere(filters, userId, kayakoUrl)
+  const orderBy = orderByAllTickets(filters)
   const skip    = (filters.page - 1) * filters.pageSize
   const take    = filters.pageSize
 
@@ -125,7 +125,7 @@ export async function fetchBuTicketsPage(
       },
     }),
     prisma.ticket.count({ where }),
-    prisma.ticket.count({ where: { isBuPs: true, kayakoUrl } }),
+    prisma.ticket.count({ where: { kayakoUrl } }),
   ])
 
   return {
@@ -142,13 +142,13 @@ export async function fetchBuTicketsPage(
   }
 }
 
-export async function fetchAllBuTickets(
-  filters:   BuTicketsListFilters,
+export async function fetchAllTicketsForExport(
+  filters:   AllTicketsListFilters,
   userId:    string,
   kayakoUrl: string,
 ): Promise<TicketRow[]> {
-  const where   = buildBuTicketsWhere(filters, userId, kayakoUrl)
-  const orderBy = orderByBuTickets(filters)
+  const where   = buildAllTicketsWhere(filters, userId, kayakoUrl)
+  const orderBy = orderByAllTickets(filters)
 
   const rows = await prisma.ticket.findMany({
     where,
@@ -171,11 +171,11 @@ export async function fetchAllBuTickets(
   })
 }
 
-export async function fetchBuTicketsFilterOptions(
+export async function fetchAllTicketsFilterOptions(
   userId:    string,
   kayakoUrl: string,
 ): Promise<FilterOptions> {
-  const base = { isBuPs: true, kayakoUrl } satisfies Prisma.TicketWhereInput
+  const base = { kayakoUrl } satisfies Prisma.TicketWhereInput
 
   const [statusRows, priorityRows, teamRows, productRows, blockerRows] = await Promise.all([
     prisma.ticket.findMany({
@@ -206,7 +206,7 @@ export async function fetchBuTicketsFilterOptions(
       where: {
         userId,
         blockerType: { not: null },
-        ticket: { isBuPs: true, kayakoUrl },
+        ticket: { kayakoUrl },
       },
       select:   { blockerType: true },
       distinct: ['blockerType'],

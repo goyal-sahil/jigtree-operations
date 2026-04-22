@@ -1,4 +1,4 @@
-// Pure functions for BU/PS Tickets URL-driven filter state.
+// Pure functions for All Tickets URL-driven filter state.
 // No side effects, no Prisma, no Next.js imports — safe to import in tests.
 
 export type SortField =
@@ -24,7 +24,7 @@ export const VALID_SORT_FIELDS: SortField[] = [
 export const PAGE_SIZES = [25, 50, 100] as const
 export type PageSize = typeof PAGE_SIZES[number]
 
-export interface BuTicketsListFilters {
+export interface AllTicketsListFilters {
   search?:      string
   status?:      string[]
   priority?:    string[]
@@ -40,7 +40,7 @@ export interface BuTicketsListFilters {
   pageSize:     PageSize
 }
 
-export const DEFAULT_FILTERS: BuTicketsListFilters = {
+export const DEFAULT_FILTERS: AllTicketsListFilters = {
   sortField: 'kayakoUpdatedAt',
   sortDir:   'desc',
   page:      1,
@@ -53,9 +53,9 @@ function toStrArr(v: string | string[] | undefined): string[] | undefined {
   return arr.length > 0 ? arr : undefined
 }
 
-export function parseBuTicketsSearchParams(
+export function parseAllTicketsSearchParams(
   params: Record<string, string | string[]>,
-): BuTicketsListFilters {
+): AllTicketsListFilters {
   const sortField = params.sortField as SortField | undefined
   const validSortField: SortField = VALID_SORT_FIELDS.includes(sortField as SortField)
     ? (sortField as SortField)
@@ -99,7 +99,7 @@ export function parseBuTicketsSearchParams(
   }
 }
 
-export function serializeBuTicketsParams(filters: BuTicketsListFilters): URLSearchParams {
+export function serializeAllTicketsParams(filters: AllTicketsListFilters): URLSearchParams {
   const p = new URLSearchParams()
   p.set('sortField', filters.sortField)
   p.set('sortDir',   filters.sortDir)
@@ -117,21 +117,13 @@ export function serializeBuTicketsParams(filters: BuTicketsListFilters): URLSear
   return p
 }
 
-/** Parses params, resets page to 1, re-serializes — used for preset matching. */
-export function normalizeBuTicketsPresetQS(
-  params: Record<string, string | string[]>,
-): string {
-  const filters = parseBuTicketsSearchParams(params)
-  return serializeBuTicketsParams({ ...filters, page: 1 }).toString()
-}
-
 /** Canonical QS from a parsed filters object (page stripped to 1). */
-export function buTicketsFilterSignature(filters: BuTicketsListFilters): string {
-  return serializeBuTicketsParams({ ...filters, page: 1 }).toString()
+export function allTicketsFilterSignature(filters: AllTicketsListFilters): string {
+  return serializeAllTicketsParams({ ...filters, page: 1 }).toString()
 }
 
 /** Count of active non-default filters (excludes sort and pagination). */
-export function countActiveFilters(filters: BuTicketsListFilters): number {
+export function countActiveFilters(filters: AllTicketsListFilters): number {
   let n = 0
   if (filters.search)           n++
   if (filters.status?.length)   n++
@@ -158,7 +150,7 @@ export function urlSearchParamsToRecord(
 }
 
 /** Returns a `?...` href that toggles or sets a sort field on the current params. */
-export function buTicketsSortHref(
+export function allTicketsSortHref(
   currentParams: URLSearchParams,
   field:         SortField,
 ): string {
@@ -176,7 +168,7 @@ export function buTicketsSortHref(
 }
 
 /** Returns a `?...` href that changes only the page number. */
-export function buTicketsPageHref(
+export function allTicketsPageHref(
   currentParams: URLSearchParams,
   page:          number,
 ): string {
