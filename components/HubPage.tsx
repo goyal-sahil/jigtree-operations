@@ -44,6 +44,68 @@ const ACCOUNT_MGMT_TILES = [
   },
 ]
 
+const PRODUCT_TILES = [
+  {
+    title:       'In Development',
+    description: 'Track features actively being built — sprint progress, blockers, and release targets.',
+    icon:        WrenchIcon,
+    accent:      'border-indigo-400',
+    iconBg:      'bg-indigo-50 text-indigo-600',
+  },
+  {
+    title:       'Coming Next',
+    description: 'Upcoming features committed for the next release cycle.',
+    icon:        ClockIcon,
+    accent:      'border-violet-400',
+    iconBg:      'bg-violet-50 text-violet-600',
+  },
+  {
+    title:       'Future',
+    description: 'Long-horizon roadmap items and strategic investments.',
+    icon:        TelescopeIcon,
+    accent:      'border-sky-400',
+    iconBg:      'bg-sky-50 text-sky-600',
+  },
+  {
+    title:       'Delivered',
+    description: 'Recently shipped features — what was released and when.',
+    icon:        CheckCircleIcon,
+    accent:      'border-emerald-400',
+    iconBg:      'bg-emerald-50 text-emerald-600',
+  },
+]
+
+const PS_TILES = [
+  {
+    title:       'Revenue',
+    description: 'PS revenue tracking — actuals vs targets across accounts and time periods.',
+    icon:        CurrencyIcon,
+    accent:      'border-green-400',
+    iconBg:      'bg-green-50 text-green-600',
+  },
+  {
+    title:       'Quote Requests',
+    description: 'Manage and track incoming PS quote requests from the sales and CS teams.',
+    icon:        ClipboardIcon,
+    accent:      'border-orange-400',
+    iconBg:      'bg-orange-50 text-orange-600',
+  },
+  {
+    title:       'PS Engagements',
+    description: 'Active and completed professional services engagements — scope, status, and delivery.',
+    icon:        UsersIcon,
+    accent:      'border-rose-400',
+    iconBg:      'bg-rose-50 text-rose-600',
+  },
+  {
+    title:       'Platinum',
+    description: 'Platinum-tier accounts — dedicated support, SLAs, and escalation tracking.',
+    icon:        StarIcon,
+    accent:      'border-yellow-400',
+    iconBg:      'bg-yellow-50 text-yellow-600',
+  },
+]
+
 const ADMIN_TILES = [
   {
     route:       '/admin',
@@ -82,6 +144,22 @@ export default function HubPage({ userName, isAdmin }: HubPageProps) {
           <h2 className="text-slate-600 text-xs font-semibold uppercase tracking-wider mb-4">Account Management</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {ACCOUNT_MGMT_TILES.map(tile => <ComingSoonTile key={tile.title} tile={tile} />)}
+          </div>
+        </section>
+
+        {/* Product */}
+        <section>
+          <h2 className="text-slate-600 text-xs font-semibold uppercase tracking-wider mb-4">Product</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {PRODUCT_TILES.map(tile => <ComingSoonTile key={tile.title} tile={tile} />)}
+          </div>
+        </section>
+
+        {/* Professional Services */}
+        <section>
+          <h2 className="text-slate-600 text-xs font-semibold uppercase tracking-wider mb-4">Professional Services</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {PS_TILES.map(tile => <ComingSoonTile key={tile.title} tile={tile} />)}
           </div>
         </section>
 
@@ -185,6 +263,72 @@ function BriefcaseIcon({ className }: { className?: string }) {
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M20 7H4a2 2 0 00-2 2v10a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2z" />
       <path strokeLinecap="round" strokeLinejoin="round" d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2" />
+    </svg>
+  )
+}
+
+function WrenchIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
+    </svg>
+  )
+}
+
+function ClockIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <circle cx="12" cy="12" r="9" strokeLinecap="round" strokeLinejoin="round" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 7v5l3 3" />
+    </svg>
+  )
+}
+
+function TelescopeIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 10l2 2" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 13.5L17 17" />
+    </svg>
+  )
+}
+
+function CheckCircleIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  )
+}
+
+function CurrencyIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  )
+}
+
+function ClipboardIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+    </svg>
+  )
+}
+
+function UsersIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+    </svg>
+  )
+}
+
+function StarIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
     </svg>
   )
 }
